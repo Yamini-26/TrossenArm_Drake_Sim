@@ -18,14 +18,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/stationary_ai/tabletop_link.stl"/>
+        <mesh filename="../meshes/stationary_ai/tabletop_link.obj"/>
       </geometry>
       <material name="maple_tabletop"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/stationary_ai/tabletop_link.stl"/>
+        <mesh filename="../meshes/stationary_ai/tabletop_link.obj"/>
       </geometry>
     </collision>
   </link>
@@ -38,14 +38,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/stationary_ai/frame_link.stl"/>
+        <mesh filename="../meshes/stationary_ai/frame_link.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/stationary_ai/frame_link.stl"/>
+        <mesh filename="../meshes/stationary_ai/frame_link.obj"/>
       </geometry>
     </collision>
   </link>
@@ -63,14 +63,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/stationary_ai/cam_high_mount_link.stl"/>
+        <mesh filename="../meshes/stationary_ai/cam_high_mount_link.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/stationary_ai/cam_high_mount_link.stl"/>
+        <mesh filename="../meshes/stationary_ai/cam_high_mount_link.obj"/>
       </geometry>
     </collision>
   </link>
@@ -96,7 +96,7 @@
       <!-- the mesh origin is at front plate in between the two infrared camera axes -->
       <origin rpy="1.5707963267948966 0 1.5707963267948966" xyz="0.0038 -0.009 0"/>
       <geometry>
-        <mesh filename="../meshes/peripherals/d405.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="../meshes/peripherals/d405.obj" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="aluminum">
         <color rgba="0.5 0.5 0.5 1"/>
@@ -176,14 +176,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/stationary_ai/cam_low_mount_link.stl"/>
+        <mesh filename="../meshes/stationary_ai/cam_low_mount_link.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/stationary_ai/cam_low_mount_link.stl"/>
+        <mesh filename="../meshes/stationary_ai/cam_low_mount_link.obj"/>
       </geometry>
     </collision>
   </link>
@@ -209,7 +209,7 @@
       <!-- the mesh origin is at front plate in between the two infrared camera axes -->
       <origin rpy="1.5707963267948966 0 1.5707963267948966" xyz="0.0038 -0.009 0"/>
       <geometry>
-        <mesh filename="../meshes/peripherals/d405.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="../meshes/peripherals/d405.obj" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="aluminum">
         <color rgba="0.5 0.5 0.5 1"/>
@@ -399,14 +399,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/base_link.stl"/>
+        <mesh filename="../meshes/wxai/base_link.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/base_link.stl"/>
+        <mesh filename="../meshes/wxai/base_link.obj"/>
       </geometry>
     </collision>
   </link>
@@ -419,14 +419,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_1.stl"/>
+        <mesh filename="../meshes/wxai/link_1.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_1.stl"/>
+        <mesh filename="../meshes/wxai/link_1.obj"/>
       </geometry>
     </collision>
   </link>
@@ -446,14 +446,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_2.stl"/>
+        <mesh filename="../meshes/wxai/link_2.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_2.stl"/>
+        <mesh filename="../meshes/wxai/link_2.obj"/>
       </geometry>
     </collision>
   </link>
@@ -473,14 +473,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_3.stl"/>
+        <mesh filename="../meshes/wxai/link_3.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_3.stl"/>
+        <mesh filename="../meshes/wxai/link_3.obj"/>
       </geometry>
     </collision>
   </link>
@@ -500,14 +500,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_4.stl"/>
+        <mesh filename="../meshes/wxai/link_4.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_4.stl"/>
+        <mesh filename="../meshes/wxai/link_4.obj"/>
       </geometry>
     </collision>
   </link>
@@ -527,14 +527,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_5.stl"/>
+        <mesh filename="../meshes/wxai/link_5.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_5.stl"/>
+        <mesh filename="../meshes/wxai/link_5.obj"/>
       </geometry>
     </collision>
   </link>
@@ -554,14 +554,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_6.stl"/>
+        <mesh filename="../meshes/wxai/link_6.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_6.stl"/>
+        <mesh filename="../meshes/wxai/link_6.obj"/>
       </geometry>
     </collision>
   </link>
@@ -581,14 +581,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/carriage_right.stl"/>
+        <mesh filename="../meshes/wxai/carriage_right.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/carriage_right.stl"/>
+        <mesh filename="../meshes/wxai/carriage_right.obj"/>
       </geometry>
     </collision>
   </link>
@@ -609,14 +609,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/carriage_left.stl"/>
+        <mesh filename="../meshes/wxai/carriage_left.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/carriage_left.stl"/>
+        <mesh filename="../meshes/wxai/carriage_left.obj"/>
       </geometry>
     </collision>
   </link>
@@ -636,14 +636,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/camera_mount_d405.stl"/>
+        <mesh filename="../meshes/wxai/camera_mount_d405.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/camera_mount_d405.stl"/>
+        <mesh filename="../meshes/wxai/camera_mount_d405.obj"/>
       </geometry>
     </collision>
   </link>
@@ -669,7 +669,7 @@
       <!-- the mesh origin is at front plate in between the two infrared camera axes -->
       <origin rpy="1.5707963267948966 0 1.5707963267948966" xyz="0.0038 -0.009 0"/>
       <geometry>
-        <mesh filename="../meshes/peripherals/d405.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="../meshes/peripherals/d405.obj" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="aluminum">
         <color rgba="0.5 0.5 0.5 1"/>
@@ -751,14 +751,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_left.stl"/>
+        <mesh filename="../meshes/wxai/gripper_left.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_left.stl"/>
+        <mesh filename="../meshes/wxai/gripper_left.obj"/>
       </geometry>
     </collision>
   </link>
@@ -776,14 +776,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_right.stl"/>
+        <mesh filename="../meshes/wxai/gripper_right.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_right.stl"/>
+        <mesh filename="../meshes/wxai/gripper_right.obj"/>
       </geometry>
     </collision>
   </link>
@@ -918,14 +918,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/base_link.stl"/>
+        <mesh filename="../meshes/wxai/base_link.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/base_link.stl"/>
+        <mesh filename="../meshes/wxai/base_link.obj"/>
       </geometry>
     </collision>
   </link>
@@ -938,14 +938,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_1.stl"/>
+        <mesh filename="../meshes/wxai/link_1.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_1.stl"/>
+        <mesh filename="../meshes/wxai/link_1.obj"/>
       </geometry>
     </collision>
   </link>
@@ -965,14 +965,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_2.stl"/>
+        <mesh filename="../meshes/wxai/link_2.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_2.stl"/>
+        <mesh filename="../meshes/wxai/link_2.obj"/>
       </geometry>
     </collision>
   </link>
@@ -992,14 +992,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_3.stl"/>
+        <mesh filename="../meshes/wxai/link_3.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_3.stl"/>
+        <mesh filename="../meshes/wxai/link_3.obj"/>
       </geometry>
     </collision>
   </link>
@@ -1019,14 +1019,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_4.stl"/>
+        <mesh filename="../meshes/wxai/link_4.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_4.stl"/>
+        <mesh filename="../meshes/wxai/link_4.obj"/>
       </geometry>
     </collision>
   </link>
@@ -1046,14 +1046,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_5.stl"/>
+        <mesh filename="../meshes/wxai/link_5.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_5.stl"/>
+        <mesh filename="../meshes/wxai/link_5.obj"/>
       </geometry>
     </collision>
   </link>
@@ -1073,14 +1073,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_6.stl"/>
+        <mesh filename="../meshes/wxai/link_6.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_6.stl"/>
+        <mesh filename="../meshes/wxai/link_6.obj"/>
       </geometry>
     </collision>
   </link>
@@ -1100,14 +1100,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/carriage_right.stl"/>
+        <mesh filename="../meshes/wxai/carriage_right.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/carriage_right.stl"/>
+        <mesh filename="../meshes/wxai/carriage_right.obj"/>
       </geometry>
     </collision>
   </link>
@@ -1128,14 +1128,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/carriage_left.stl"/>
+        <mesh filename="../meshes/wxai/carriage_left.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/carriage_left.stl"/>
+        <mesh filename="../meshes/wxai/carriage_left.obj"/>
       </geometry>
     </collision>
   </link>
@@ -1155,14 +1155,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/camera_mount_d405.stl"/>
+        <mesh filename="../meshes/wxai/camera_mount_d405.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/camera_mount_d405.stl"/>
+        <mesh filename="../meshes/wxai/camera_mount_d405.obj"/>
       </geometry>
     </collision>
   </link>
@@ -1188,7 +1188,7 @@
       <!-- the mesh origin is at front plate in between the two infrared camera axes -->
       <origin rpy="1.5707963267948966 0 1.5707963267948966" xyz="0.0038 -0.009 0"/>
       <geometry>
-        <mesh filename="../meshes/peripherals/d405.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="../meshes/peripherals/d405.obj" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="aluminum">
         <color rgba="0.5 0.5 0.5 1"/>
@@ -1270,14 +1270,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_left.stl"/>
+        <mesh filename="../meshes/wxai/gripper_left.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_left.stl"/>
+        <mesh filename="../meshes/wxai/gripper_left.obj"/>
       </geometry>
     </collision>
   </link>
@@ -1295,14 +1295,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_right.stl"/>
+        <mesh filename="../meshes/wxai/gripper_right.obj"/>
       </geometry>
       <material name="trossen_black"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_right.stl"/>
+        <mesh filename="../meshes/wxai/gripper_right.obj"/>
       </geometry>
     </collision>
   </link>
