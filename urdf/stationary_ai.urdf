@@ -731,9 +731,9 @@
       <material name="trossen_black"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="0 0 0" xyz="0 0 0.032"/>
       <geometry>
-        <mesh filename="../meshes/wxai/base_link.obj"/>
+        <cylinder radius="0.034" length="0.055"/>
       </geometry>
     </collision>
   </link>
@@ -750,12 +750,6 @@
       </geometry>
       <material name="trossen_black"/>
     </visual>
-    <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
-      <geometry>
-        <mesh filename="../meshes/wxai/link_1.obj"/>
-      </geometry>
-    </collision>
   </link>
   <joint name="follower_right_joint_0" type="revolute">
     <origin rpy="0 0 0" xyz="0 0 0.05725"/>
@@ -778,9 +772,9 @@
       <material name="trossen_black"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="0 0 0" xyz="-0.13 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_2.obj"/>
+        <box size="0.3 0.05 0.05"/>
       </geometry>
     </collision>
   </link>
@@ -805,9 +799,9 @@
       <material name="trossen_black"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="0 0 0" xyz="0.16 0 0.06"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_3.obj"/>
+        <box size="0.22 0.05 0.04"/>
       </geometry>
     </collision>
   </link>
@@ -832,9 +826,9 @@
       <material name="trossen_black"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="0 0 0" xyz="0.068 0 0.07"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_4.obj"/>
+        <cylinder radius="0.029" length="0.06"/>
       </geometry>
     </collision>
   </link>
@@ -859,9 +853,9 @@
       <material name="trossen_black"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="0 1.57079632679 0" xyz="0.003 0 -0.045"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_5.obj"/>
+        <cylinder radius="0.029" length="0.05"/>
       </geometry>
     </collision>
   </link>
@@ -886,9 +880,15 @@
       <material name="trossen_black"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="0 1.57079632679 0" xyz="0.025 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/link_6.obj"/>
+        <cylinder radius="0.029" length="0.05"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin rpy="0 0 0" xyz="0.07 0 0"/>
+      <geometry>
+        <box size="0.025 0.187 0.0618"/>
       </geometry>
     </collision>
   </link>
@@ -912,12 +912,6 @@
       </geometry>
       <material name="trossen_black"/>
     </visual>
-    <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
-      <geometry>
-        <mesh filename="../meshes/wxai/carriage_right.obj"/>
-      </geometry>
-    </collision>
   </link>
   <joint name="follower_right_right_carriage_joint" type="prismatic">
     <origin rpy="0 0 0" xyz="0.0865 -0.023 0"/>
@@ -940,12 +934,6 @@
       </geometry>
       <material name="trossen_black"/>
     </visual>
-    <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
-      <geometry>
-        <mesh filename="../meshes/wxai/carriage_left.obj"/>
-      </geometry>
-    </collision>
   </link>
   <joint name="follower_right_left_carriage_joint" type="prismatic">
     <origin rpy="0 0 0" xyz="0.0865 0.023 0"/>
@@ -967,12 +955,6 @@
       </geometry>
       <material name="trossen_black"/>
     </visual>
-    <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
-      <geometry>
-        <mesh filename="../meshes/wxai/camera_mount_d405.obj"/>
-      </geometry>
-    </collision>
   </link>
   <joint name="follower_right_camera_mount_joint" type="fixed">
     <origin rpy="0 0 0" xyz="0.012 0 0"/>
@@ -1005,7 +987,7 @@
     <collision>
       <origin rpy="0 0 0" xyz="-0.0078 -0.009 0"/>
       <geometry>
-        <box size="0.023 0.042 0.042"/>
+        <box size="0.027 0.045 0.045"/>
       </geometry>
     </collision>
     <inertial>
