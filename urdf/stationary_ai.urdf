@@ -4,10 +4,10 @@
   <!-- maple_tabletop -->
   <!-- wxai -->
   <material name="trossen_black">
-    <texture filename="../meshes/trossen_black.png"/>
+    <color rgba="0.137 0.137 0.137 1.0"/>
   </material>
   <material name="maple_tabletop">
-    <texture filename="../meshes/maple_tabletop.png"/>
+    <color rgba="0.58 0.45 0.31 1.0"/>
   </material>
   <link name="tabletop_link">
     <inertial>
