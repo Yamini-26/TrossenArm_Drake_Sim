@@ -23,9 +23,9 @@
       <material name="maple_tabletop"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="0 0 0" xyz="-0.0055 0 0.01"/>
       <geometry>
-        <mesh filename="../meshes/stationary_ai/tabletop_link.obj"/>
+        <box size="0.749 1.2192 0.02"/>
       </geometry>
     </collision>
   </link>
