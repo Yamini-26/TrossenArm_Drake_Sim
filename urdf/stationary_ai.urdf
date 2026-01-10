@@ -115,12 +115,6 @@
       </geometry>
       <material name="trossen_black"/>
     </visual>
-    <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
-      <geometry>
-        <mesh filename="../meshes/stationary_ai/cam_high_mount_link.obj"/>
-      </geometry>
-    </collision>
   </link>
   <joint name="cam_high_mount_joint" type="fixed">
     <origin rpy="-3.141592653589793 0.0 1.5707963267948966" xyz="-0.401982 -0.040000 1.059852"/>
@@ -228,12 +222,6 @@
       </geometry>
       <material name="trossen_black"/>
     </visual>
-    <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
-      <geometry>
-        <mesh filename="../meshes/stationary_ai/cam_low_mount_link.obj"/>
-      </geometry>
-    </collision>
   </link>
   <joint name="cam_low_mount_joint" type="fixed">
     <origin rpy="-3.141592653589793 0.0 1.5707963267948966" xyz="-0.415000 -0.024884 0.044061"/>
