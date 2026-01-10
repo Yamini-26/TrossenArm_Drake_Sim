@@ -42,10 +42,58 @@
       </geometry>
       <material name="trossen_black"/>
     </visual>
-    <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+    <collision> <!-- front bar -->
+      <origin rpy="0 0 0" xyz="0.35 0 0.01"/>
       <geometry>
-        <mesh filename="../meshes/stationary_ai/frame_link.obj"/>
+        <box size="0.02 0.99 0.02" />
+      </geometry>
+    </collision>
+    <collision> <!-- back bar -->
+      <origin rpy="0 0 0" xyz="-0.39 0 -0.01"/>
+      <geometry>
+        <box size="0.02 0.99 0.02" />
+      </geometry>
+    </collision>
+    <collision> <!-- top bar -->
+      <origin rpy="0 0 0" xyz="-0.38 0 1.03"/>
+      <geometry>
+        <box size="0.04 0.89 0.02" />
+      </geometry>
+    </collision>
+    <collision> <!-- left bars -->
+      <origin rpy="0 0 0" xyz="-0.02 -0.4575 0.01"/>
+      <geometry>
+        <box size="0.76 0.075 0.02" />
+      </geometry>
+    </collision>
+    <collision> <!-- right bars -->
+      <origin rpy="0 0 0" xyz="-0.02 0.4575 0.01"/>
+      <geometry>
+        <box size="0.76 0.075 0.02" />
+      </geometry>
+    </collision>
+    <collision> <!-- left upright -->
+      <origin rpy="0 0 0" xyz="-0.38 -0.43 0.51"/>
+      <geometry>
+        <box size="0.04 0.02 1.02" />
+      </geometry>
+    </collision>
+    <collision> <!-- right upright -->
+      <origin rpy="0 0 0" xyz="-0.38 0.43 0.51"/>
+      <geometry>
+        <box size="0.04 0.02 1.02" />
+      </geometry>
+    </collision>
+    <collision> <!-- left brace -->
+      <origin rpy="0 -0.78539816 0" xyz="-0.265 -0.43 0.1265"/>
+      <geometry>
+        <box size="0.02 0.02 0.35" />
+      </geometry>
+    </collision>
+    <collision> <!-- right brace -->
+      <origin rpy="0 -0.78539816 0" xyz="-0.265 0.43 0.1265"/>
+      <geometry>
+        <box size="0.02 0.02 0.35" />
       </geometry>
     </collision>
   </link>
