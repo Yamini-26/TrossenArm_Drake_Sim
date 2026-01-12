@@ -671,7 +671,7 @@
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_left.obj"/>
+        <mesh filename="../meshes/wxai/gripper_left.vtk"/>
       </geometry>
     </collision>
   </link>
@@ -696,7 +696,7 @@
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_right.obj"/>
+        <mesh filename="../meshes/wxai/gripper_right.vtk"/>
       </geometry>
     </collision>
   </link>
@@ -1067,7 +1067,7 @@
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_left.obj"/>
+        <mesh filename="../meshes/wxai/gripper_left.vtk"/>
       </geometry>
     </collision>
   </link>
@@ -1092,8 +1092,12 @@
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_right.obj"/>
+        <mesh filename="../meshes/wxai/gripper_right.vtk"/>
       </geometry>
+      <drake:proximity_properties>
+        <drake:compliant_hydroelastic/>
+        <drake:hydroelastic_modulus value="1e8"/>
+      </drake:proximity_properties>
     </collision>
   </link>
   <joint name="follower_right_right_gripper_joint" type="fixed">
