@@ -31,9 +31,9 @@ Activate the virtual environment:
 source .venv/bin/activate
 ```
 
-View a model with Drake visualizer:
+View the model in MeshCat (with hydroelastics enabled):
 
 ```bash
-python -m pydrake.visualization.model_visualizer models/scene_joint.xml
+python -m pydrake.visualization.model_visualizer urdf/stationary_ai.urdf --compliance_type compliant
 ```
 
