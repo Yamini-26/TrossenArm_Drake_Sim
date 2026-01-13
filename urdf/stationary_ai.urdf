@@ -102,6 +102,11 @@
     <parent link="tabletop_link"/>
     <child link="frame_link"/>
   </joint>
+  <joint name="world_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <parent link="world"/>
+    <child link="frame_link"/>
+  </joint>
   <link name="cam_high_mount_link">
     <inertial>
       <origin rpy="0 0 0" xyz="0.039385 0.055638 0.018523"/>
