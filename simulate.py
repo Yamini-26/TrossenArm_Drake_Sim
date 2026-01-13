@@ -51,8 +51,13 @@ for actuator_index in plant.GetJointActuatorIndices():
         lower_limit = actuator.joint().position_lower_limits()[0]
         upper_limit = actuator.joint().position_upper_limits()[0]
         default = actuator.joint().default_positions()[0]
+        step = (upper_limit - lower_limit) / 100.0
         meshcat.AddSlider(
-            name=name, min=lower_limit, max=upper_limit, step=0.1, value=default
+            name=name,
+            min=lower_limit,
+            max=upper_limit,
+            step=step,
+            value=default,
         )
         slider_names.append([name])
 meshcat.AddButton("Stop Simulation")
