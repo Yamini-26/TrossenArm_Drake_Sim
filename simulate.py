@@ -39,7 +39,7 @@ scene_graph.set_config(scene_graph_config)
 # Set up meshcat visualization.
 meshcat = StartMeshcat()
 visualization_config = VisualizationConfig()
-visualization_config.publish_proximity = True
+visualization_config.publish_proximity = False
 ApplyVisualizationConfig(visualization_config, builder=builder, meshcat=meshcat)
 
 # Add joint sliders to meshcat for setting desired joint angles.
@@ -112,11 +112,11 @@ builder.Connect(
 # Set up the simulator.
 diagram = builder.Build()
 simulator = Simulator(diagram)
-simulator.set_target_realtime_rate(1.0)
+simulator.set_target_realtime_rate(3.0)
 simulator.Initialize()
 
 # Run the simulation.
-input("Waiting for meshcat... press [ENTER] to continue.")
+input("Waiting for meshcat... press [ENTER] to start simulating.")
 print("")
 print("Use the meshcat sliders to control the robot.")
 print("Press the 'Stop Simulation' button to quit.")
