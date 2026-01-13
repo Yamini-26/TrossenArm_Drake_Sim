@@ -12,25 +12,32 @@ from pydrake.all import (
     AddMultibodyPlantSceneGraph,
     Parser,
     Simulator,
-    AddDefaultVisualization,
+    SceneGraphConfig,
+    ApplyVisualizationConfig,
+    VisualizationConfig,
 )
 
-# Initialize the meshcat visualizer.
-meshcat = StartMeshcat()
 
-# Set up the system diagram.
+# Load the robot model.
 builder = DiagramBuilder()
-plant, _ = AddMultibodyPlantSceneGraph(builder, time_step=0.005)
+plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.005)
 Parser(plant).AddModels("urdf/stationary_ai.urdf")
 plant.Finalize()
 
-AddDefaultVisualization(builder, meshcat)
+# Enable hydroelastic contact.
+scene_graph_config = SceneGraphConfig()
+scene_graph_config.default_proximity_properties.compliance_type = "compliant"
+scene_graph.set_config(scene_graph_config)
 
-diagram = builder.Build()
-context = diagram.CreateDefaultContext()
+# Set up meshcat visualization.
+meshcat = StartMeshcat()
+visualization_config = VisualizationConfig()
+visualization_config.publish_proximity = True
+ApplyVisualizationConfig(visualization_config, builder=builder, meshcat=meshcat)
 
 # Set up the simulator.
-simulator = Simulator(diagram, context)
+diagram = builder.Build()
+simulator = Simulator(diagram)
 simulator.set_target_realtime_rate(1.0)
 simulator.Initialize()
 
