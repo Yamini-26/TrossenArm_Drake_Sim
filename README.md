@@ -37,3 +37,8 @@ View the model in MeshCat (with hydroelastics enabled):
 python -m pydrake.visualization.model_visualizer urdf/stationary_ai.urdf --compliance_type compliant
 ```
 
+Run an interactive simulation (use MeshCat sliders to control the robot):
+
+```bash
+./simulate.py
+```
