@@ -24,6 +24,7 @@ from pydrake.all import (
     Multiplexer,
     ConstantVectorSource,
 )
+from pydrake.common.yaml import yaml_load_file
 
 # Load the robot model.
 builder = DiagramBuilder()
@@ -41,6 +42,11 @@ meshcat = StartMeshcat()
 visualization_config = VisualizationConfig()
 visualization_config.publish_proximity = False
 ApplyVisualizationConfig(visualization_config, builder=builder, meshcat=meshcat)
+
+meshcat_config = yaml_load_file("meshcat_config.yaml")
+for p in meshcat_config["initial_properties"]:
+    meshcat.SetProperty(p["path"], p["property"], p["value"])
+meshcat.SetCameraPose([0.9, 0.0, 0.9], [0.0, 0.0, 0.4])
 
 # Add joint sliders to meshcat for setting desired joint angles.
 slider_names = []
@@ -112,7 +118,7 @@ builder.Connect(
 # Set up the simulator.
 diagram = builder.Build()
 simulator = Simulator(diagram)
-simulator.set_target_realtime_rate(3.0)
+simulator.set_target_realtime_rate(1.0)
 simulator.Initialize()
 
 # Run the simulation.
