@@ -23,6 +23,7 @@ from pydrake.all import (
     LeafSystem,
     Multiplexer,
     ConstantVectorSource,
+    RigidTransform,
 )
 from pydrake.common.yaml import yaml_load_file
 
@@ -30,6 +31,14 @@ from pydrake.common.yaml import yaml_load_file
 builder = DiagramBuilder()
 plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.005)
 model_indices = Parser(plant).AddModels("urdf/stationary_ai.urdf")
+
+# Add a small cube to interact with, and set it's default pose to be just above
+# the table.
+Parser(plant).AddModels("urdf/cube.urdf")
+cube_body = plant.GetBodyByName("cube_link")
+X = RigidTransform()
+X.set_translation([0.0, 0.0, 0.02])
+plant.SetDefaultFloatingBaseBodyPose(cube_body, X)
 plant.Finalize()
 
 # Enable hydroelastic contact.
