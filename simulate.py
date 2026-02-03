@@ -49,7 +49,7 @@ scene_graph.set_config(scene_graph_config)
 # Set up meshcat visualization.
 meshcat = StartMeshcat()
 visualization_config = VisualizationConfig()
-visualization_config.publish_proximity = False
+visualization_config.publish_proximity = True
 ApplyVisualizationConfig(visualization_config, builder=builder, meshcat=meshcat)
 
 meshcat_config = yaml_load_file("meshcat_config.yaml")

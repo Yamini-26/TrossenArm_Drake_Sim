@@ -671,9 +671,21 @@
       <material name="trossen_black"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="0.023 0.204 -0.134" xyz="0.0286 -0.0135 0.0037"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_left.vtk"/>
+        <box size="0.055 0.01 0.02"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin rpy="-0.051 -0.337 -0.139" xyz="0.0285 -0.0135 -0.00973"/>
+      <geometry>
+        <box size="0.055 0.01 0.02"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin rpy="0 0 0" xyz="0.0622  -0.02083 -0.00105"/>
+      <geometry>
+        <box size="0.01464 0.00428 0.01534"/>
       </geometry>
     </collision>
   </link>
@@ -696,9 +708,21 @@
       <material name="trossen_black"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="-0.023 0.204 0.134" xyz="0.0286 0.0135 0.0037"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_right.vtk"/>
+        <box size="0.055 0.01 0.02"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin rpy="0.051 -0.337 0.139" xyz="0.0285 0.0135 -0.00973"/>
+      <geometry>
+        <box size="0.055 0.01 0.02"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin rpy="0 0 0" xyz="0.0622  0.02083 -0.00105"/>
+      <geometry>
+        <box size="0.01464 0.00428 0.01534"/>
       </geometry>
     </collision>
   </link>
@@ -1066,9 +1090,21 @@
       <material name="trossen_black"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="0.023 0.204 -0.134" xyz="0.0286 -0.0135 0.0037"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_left.vtk"/>
+        <box size="0.055 0.01 0.02"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin rpy="-0.051 -0.337 -0.139" xyz="0.0285 -0.0135 -0.00973"/>
+      <geometry>
+        <box size="0.055 0.01 0.02"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin rpy="0 0 0" xyz="0.0622  -0.02083 -0.00105"/>
+      <geometry>
+        <box size="0.01464 0.00428 0.01534"/>
       </geometry>
     </collision>
   </link>
@@ -1091,9 +1127,21 @@
       <material name="trossen_black"/>
     </visual>
     <collision>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="-0.023 0.204 0.134" xyz="0.0286 0.0135 0.0037"/>
       <geometry>
-        <mesh filename="../meshes/wxai/gripper_right.vtk"/>
+        <box size="0.055 0.01 0.02"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin rpy="0.051 -0.337 0.139" xyz="0.0285 0.0135 -0.00973"/>
+      <geometry>
+        <box size="0.055 0.01 0.02"/>
+      </geometry>
+    </collision>
+    <collision>
+      <origin rpy="0 0 0" xyz="0.0622  0.02083 -0.00105"/>
+      <geometry>
+        <box size="0.01464 0.00428 0.01534"/>
       </geometry>
     </collision>
   </link>
