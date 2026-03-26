@@ -1,7 +1,11 @@
 # Trossen Arm Drake
 
 A Drake-compatible model of the bimanual [Trossen Stationary
-AI](https://www.trossenrobotics.com/stationary-ai) (formerly Aloha 2) robot.
+AI](https://www.trossenrobotics.com/stationary-ai) (formerly Aloha 2) robot with
+[hydroelastic contact](https://arxiv.org/abs/2110.04157) and 
+[CENIC](https://arxiv.org/abs/2511.08771) error-controlled integration.
+
+![](img/trossen_drake_screenshot.png)
 
 Adopted from the [Trossen Arm
 Description](https://github.com/TrossenRobotics/trossen_arm_description).
