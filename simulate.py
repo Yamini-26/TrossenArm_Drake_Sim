@@ -16,6 +16,8 @@ from pydrake.all import (
     AddMultibodyPlantSceneGraph,
     Parser,
     Simulator,
+    SimulatorConfig,
+    ApplySimulatorConfig,
     SceneGraphConfig,
     ApplyVisualizationConfig,
     VisualizationConfig,
@@ -29,7 +31,7 @@ from pydrake.common.yaml import yaml_load_file
 
 # Load the robot model.
 builder = DiagramBuilder()
-plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.005)
+plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.0)
 model_indices = Parser(plant).AddModels("urdf/stationary_ai.urdf")
 
 # Add a small cube to interact with, and set it's default pose to be just above
@@ -50,6 +52,7 @@ scene_graph.set_config(scene_graph_config)
 meshcat = StartMeshcat()
 visualization_config = VisualizationConfig()
 visualization_config.publish_proximity = True
+visualization_config.publish_period = np.inf
 ApplyVisualizationConfig(visualization_config, builder=builder, meshcat=meshcat)
 
 meshcat_config = yaml_load_file("meshcat_config.yaml")
@@ -76,6 +79,7 @@ for actuator_index in plant.GetJointActuatorIndices():
         )
         slider_names.append([name])
 meshcat.AddButton("Stop Simulation")
+
 
 # Add a little controller to send the slider values as joint position targets.
 class MeshcatSliders(LeafSystem):
@@ -105,6 +109,7 @@ class MeshcatSliders(LeafSystem):
         for i, slider in enumerate(self._sliders[port_index]):
             output[i] = self._meshcat.GetSliderValue(slider)
 
+
 nu = len(slider_names)
 assert nu == plant.num_actuators(model_indices[0]), (
     "Number of sliders must match number of actuated joints."
@@ -124,9 +129,18 @@ builder.Connect(
     plant.get_desired_state_input_port(model_indices[0]),
 )
 
-# Set up the simulator.
 diagram = builder.Build()
-simulator = Simulator(diagram)
+context = diagram.CreateDefaultContext()
+
+# Set up the simulator to use CENIC
+simulator = Simulator(diagram, context)
+config = SimulatorConfig()
+config.integration_scheme = "cenic"
+config.accuracy = 1e-3
+config.max_step_size = 0.1
+config.use_error_control = True
+config.publish_every_time_step = True
+ApplySimulatorConfig(config, simulator)
 simulator.set_target_realtime_rate(1.0)
 simulator.Initialize()
 
