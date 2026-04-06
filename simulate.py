@@ -26,6 +26,7 @@ from pydrake.all import (
     Multiplexer,
     ConstantVectorSource,
     RigidTransform,
+    EventStatus,
 )
 from pydrake.common.yaml import yaml_load_file
 
@@ -149,5 +150,12 @@ input("Waiting for meshcat... press [ENTER] to start simulating.")
 print("")
 print("Use the meshcat sliders to control the robot.")
 print("Press the 'Stop Simulation' button to quit.")
-while meshcat.GetButtonClicks("Stop Simulation") < 1:
-    simulator.AdvanceTo(simulator.get_context().get_time() + 0.1)
+
+simulator.set_monitor(
+    lambda context: (
+        EventStatus.Succeeded()
+        if meshcat.GetButtonClicks("Stop Simulation") < 1
+        else EventStatus.ReachedTermination(diagram, "Stopped by user.")
+    )
+)
+simulator.AdvanceTo(np.inf)
