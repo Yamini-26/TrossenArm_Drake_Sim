@@ -2,7 +2,7 @@
 
 ##
 #
-# Run a simple interactive simulation of the Trossen Stationary bimanual robot.
+# Run a simple automatic controller simulation of the Trossen Stationary bimanual robot.
 #
 ##
 
@@ -27,16 +27,18 @@ from pydrake.all import (
     ConstantVectorSource,
     RigidTransform,
     EventStatus,
+    StateInterpolatorWithDiscreteDerivative,
 )
 from pydrake.common.yaml import yaml_load_file
+
 
 # Load the robot model.
 builder = DiagramBuilder()
 plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.0)
 model_indices = Parser(plant).AddModels("urdf/stationary_ai.urdf")
+# print(f"model_indices: {model_indices[0]}")
 
-# Add a small cube to interact with, and set it's default pose to be just above
-# the table.
+# Add a small cube to interact with, and set it's default pose to be just above the table.
 Parser(plant).AddModels("urdf/cube.urdf")
 cube_body = plant.GetBodyByName("cube_link")
 X = RigidTransform()
@@ -61,72 +63,58 @@ for p in meshcat_config["initial_properties"]:
     meshcat.SetProperty(p["path"], p["property"], p["value"])
 meshcat.SetCameraPose([0.9, 0.0, 0.9], [0.0, 0.0, 0.4])
 
-# Add joint sliders to meshcat for setting desired joint angles.
-slider_names = []
+# Custom controller by inheriting from LeafSystem
+class DebugTrajectory(LeafSystem):
+    """Trajectory that prints its output to verify it's working."""
+    
+    def __init__(self, num_joints):
+        LeafSystem.__init__(self)
+        self._num_joints = num_joints
+        # self._counter = 0        
+        self.DeclareVectorOutputPort(
+            "desired_positions", # Name of the output port
+            num_joints,
+            self.CalcOutput      # Callback function to calculate the output values
+        )
+        # print(f"Trajectory created for {num_joints} joints")
+    
+    def CalcOutput(self, context, output):  # context: contains simulation state, output: array to fill with joint commands
+        t = context.get_time()
+       
+        # Simple trajectory: cosine wave that changes over time
+        for i in range(self._num_joints):
+            # Simple oscillation
+            output[i] = 0.5 * np.cos(t)  # All joints oscillate together at an amplitude 0.5 radians and speed 1 since cos(tx1)
+
+        # Different joints, different motions
+        # for i in range(self._num_joints):
+        #     output[i] = 0.5 * np.sin(t * (i+1)/5)  # Each joint moves at different speed
+
+        # Only move first 3 joints
+        # for i in range(self._num_joints):
+        #     if i < 3:
+        #         output[i] = 0.3 * np.sin(t)
+        #     else:
+        #         output[i] = 0.0
+        
+# Get the number of actuators
+nu = len(plant.GetJointActuatorIndices())
+print(f"Number of actuators: {nu}")
+print(f"Joint actuators found:")
 for actuator_index in plant.GetJointActuatorIndices():
     actuator = plant.get_joint_actuator(actuator_index)
-    if actuator.has_controller():
-        name = actuator.joint().name()
-        lower_limit = actuator.joint().position_lower_limits()[0]
-        upper_limit = actuator.joint().position_upper_limits()[0]
-        default = actuator.joint().default_positions()[0]
-        step = (upper_limit - lower_limit) / 100.0
-        meshcat.AddSlider(
-            name=name,
-            min=lower_limit,
-            max=upper_limit,
-            step=step,
-            value=default,
-        )
-        slider_names.append([name])
-meshcat.AddButton("Stop Simulation")
+    print(f"- {actuator.joint().name()}")
 
-
-# Add a little controller to send the slider values as joint position targets.
-class MeshcatSliders(LeafSystem):
-    """A system that outputs the values from meshcat sliders.
-
-    An output port is created for each element in the list `slider_names`.
-    Corresponding sliders with these names must have *already* been added to
-    Meshcat via Meshcat.AddSlider().
-
-    Adopted from https://github.com/RussTedrake/underactuated.
-    """
-
-    def __init__(self, meshcat: Meshcat, slider_names: List[str]):
-        LeafSystem.__init__(self)
-
-        self._meshcat = meshcat
-        self._sliders = slider_names
-        for i, slider_iterable in enumerate(self._sliders):
-            port = self.DeclareVectorOutputPort(
-                f"slider_group_{i}",
-                len(slider_iterable),
-                partial(self._DoCalcOutput, port_index=i),
-            )
-            port.disable_caching_by_default()
-
-    def _DoCalcOutput(self, context, output, port_index):
-        for i, slider in enumerate(self._sliders[port_index]):
-            output[i] = self._meshcat.GetSliderValue(slider)
-
-
-nu = len(slider_names)
-assert nu == plant.num_actuators(model_indices[0]), (
-    "Number of sliders must match number of actuated joints."
-)
-sliders = builder.AddSystem(MeshcatSliders(meshcat, slider_names))
-q_desired = builder.AddSystem(Multiplexer(nu))
-v_desired = builder.AddSystem(ConstantVectorSource(np.zeros(nu)))
-x_desired = builder.AddSystem(Multiplexer([nu, nu]))
+# Creates instance of the controller and adds it to the diagram builder - outputs only 14 joints
+trajectory_source = builder.AddSystem(DebugTrajectory(nu))
+# Converts position commands to position + velocity commands
+# Robot's input port expects [position, velocities] (28 values total for 14 joints)
+state_interpolator = builder.AddSystem(StateInterpolatorWithDiscreteDerivative(nu, 0.01, True)) # 0.01 - time constant (how fast to compute velocities), True - suppresses initial velocity spike
 
 # Connect the sliders to the plant's desired state input port.
-for i in range(nu):
-    builder.Connect(sliders.get_output_port(i), q_desired.get_input_port(i))
-builder.Connect(q_desired.get_output_port(), x_desired.get_input_port(0))
-builder.Connect(v_desired.get_output_port(), x_desired.get_input_port(1))
+builder.Connect(trajectory_source.get_output_port(0),state_interpolator.get_input_port())
 builder.Connect(
-    x_desired.get_output_port(),
+    state_interpolator.get_output_port(),
     plant.get_desired_state_input_port(model_indices[0]),
 )
 
@@ -148,14 +136,10 @@ simulator.Initialize()
 # Run the simulation.
 input("Waiting for meshcat... press [ENTER] to start simulating.")
 print("")
-print("Use the meshcat sliders to control the robot.")
-print("Press the 'Stop Simulation' button to quit.")
+print("Watch for movement in MeshCat!")
+print("Press Ctrl+C to stop the simulation.")
 
-simulator.set_monitor(
-    lambda context: (
-        EventStatus.Succeeded()
-        if meshcat.GetButtonClicks("Stop Simulation") < 1
-        else EventStatus.ReachedTermination(diagram, "Stopped by user.")
-    )
-)
-simulator.AdvanceTo(np.inf)
+try:
+    simulator.AdvanceTo(np.inf)
+except KeyboardInterrupt:
+    EventStatus.Killed(diagram, "Simulation stopped by user.")
