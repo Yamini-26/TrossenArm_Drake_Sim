@@ -46,3 +46,30 @@ Run an interactive simulation (use MeshCat sliders to control the robot):
 ```bash
 ./simulate.py
 ```
+
+<!-- INITIAL GRIPPER POSITIONS
+  follower_left_gripper_left     -> (0.003, 0.273, 0.183)
+  follower_left_gripper_right    -> (-0.043, 0.273, 0.183)
+  follower_left_ee_gripper_link  -> (-0.020, 0.204, 0.183)
+  follower_right_gripper_left    -> (-0.043, -0.273, 0.183)
+  follower_right_gripper_right   -> (0.003, -0.273, 0.183)
+  follower_right_ee_gripper_link -> (-0.020, -0.204, 0.183)
+  follower_left_left_gripper_joint_parent -> (0.003, 0.273, 0.183)
+  follower_left_right_gripper_joint_parent -> (-0.043, 0.273, 0.183)
+  follower_left_ee_gripper_parent -> (-0.020, 0.204, 0.183)
+  follower_right_left_gripper_joint_parent -> (-0.043, -0.273, 0.183)
+  follower_right_right_gripper_joint_parent -> (0.003, -0.273, 0.183)
+  follower_right_ee_gripper_parent -> (-0.020, -0.204, 0.183)
+CARRIAGE POSITIONS (these move with gripper)
+  follower_left_carriage_right   -> (-0.043, 0.273, 0.183)
+  follower_left_carriage_left    -> (0.003, 0.273, 0.183)
+  follower_right_carriage_right  -> (0.003, -0.273, 0.183)
+  follower_right_carriage_left   -> (-0.043, -0.273, 0.183)
+  follower_left_right_carriage_joint_parent -> (-0.043, 0.273, 0.183)
+  follower_left_left_carriage_joint_parent -> (0.003, 0.273, 0.183)
+  follower_right_right_carriage_joint_parent -> (0.003, -0.273, 0.183)
+  follower_right_left_carriage_joint_parent -> (-0.043, -0.273, 0.183)
+  follower_left_right_carriage_joint_follower_left_right_carriage_joint_parent_F -> (-0.043, 0.273, 0.183)
+  follower_left_right_carriage_joint_follower_left_carriage_right_M -> (-0.043, 0.273, 0.183)
+  follower_right_right_carriage_joint_follower_right_right_carriage_joint_parent_F -> (0.003, -0.273, 0.183)
+  follower_right_right_carriage_joint_follower_right_carriage_right_M -> (0.003, -0.273, 0.183) -->

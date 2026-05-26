@@ -29,8 +29,256 @@ from pydrake.all import (
     EventStatus,
     StateInterpolatorWithDiscreteDerivative,
     FrameIndex,
+    InverseKinematics,
+    RotationMatrix,
+    Solve,
 )
 from pydrake.common.yaml import yaml_load_file
+
+
+def solve_ik(plant, plant_context, ee_frame, target_position, target_rotation=None, q0=None):
+    """
+    Solve IK for the right arm to place ee_frame at target_position.
+    
+    Args:
+        plant: the MultibodyPlant
+        plant_context: current plant context (used for initial guess)
+        ee_frame: the end-effector frame to position (follower_left_ee_gripper_link)
+        target_position: np.array [x, y, z] in world frame
+        target_rotation: RotationMatrix for orientation (None = unconstrained)
+        q0: initial joint guess (None = use current context)
+    
+    Returns:
+        q_sol: joint positions solution, or None if failed
+    """
+    ik = InverseKinematics(plant, plant_context)
+    
+    # Position constraint: place ee within 1cm of target
+    ik.AddPositionConstraint(
+        frameB=ee_frame,           # gripper frame
+        p_BQ=np.zeros(3),          # point at ee_frame origin
+        frameA=plant.world_frame(), # expressed in world frame
+        p_AQ_lower=target_position - 0.002,  # 0.2cm tolerance box
+        p_AQ_upper=target_position + 0.002,
+    )
+    
+    # Orientation constraint: point gripper downward (optional but important for grasping)
+    if target_rotation is not None:
+        ik.AddOrientationConstraint(
+            frameAbar=plant.world_frame(),
+            R_AbarA=target_rotation,
+            frameBbar=ee_frame,
+            R_BbarB=RotationMatrix(),  # identity = no extra rotation on ee
+            theta_bound=0.1,           # 0.1 rad (~6 deg) tolerance
+        )
+    
+    # Set initial guess
+    prog = ik.prog()
+    q_vars = ik.q()
+    
+    if q0 is not None:
+        prog.SetInitialGuess(q_vars, q0)
+    else:
+        q0 = plant.GetPositions(plant_context)
+        prog.SetInitialGuess(q_vars, q0)
+    
+    result = Solve(prog)
+    
+    if result.is_success():
+        return result.GetSolution(q_vars)
+    else:
+        print(f"  IK failed for target {target_position}")
+        return None
+    
+
+class PickAndPlaceController(LeafSystem):
+    """
+    State machine controller for pick-and-place.
+    Computes IK waypoints and interpolates between them.
+    """
+    
+    # State machine phases
+    APPROACH  = 0  # Move above cube
+    DESCEND   = 1  # Lower to cube
+    GRASP     = 2  # Close gripper
+    LIFT      = 3  # Lift cube
+    TRANSPORT = 4  # Move above drop zone
+    DROP      = 5  # Lower to drop zone
+    RELEASE   = 6  # Open gripper
+    RESET     = 7  # Return to home
+    
+    def __init__(self, plant, num_joints, cube_position, drop_position):
+        LeafSystem.__init__(self)
+        self._plant = plant
+        self._plant_context = plant.CreateDefaultContext()
+        self._num_joints = num_joints
+        
+        # Key positions
+        self._cube_pos = np.array(cube_position)
+        self._drop_pos = np.array(drop_position)
+
+        # Positions that we know from inspecting the model:
+        #   EE frame position: (-0.020, 0.204, 0.183)
+        #   right finger:      (-0.043, 0.273, 0.183)
+        #   left finger:       (0.003, 0.273, 0.183)
+        # EE (End Effector) starts at: [-0.02, 0.20, 0.18] and the cube is at: [0.10, 0.15, 0.02]
+        # The difference is:
+        #   X: needs to move +0.12m (12cm to the right)
+        #   Y: needs to move -0.05m (5cm backward)
+        #   Z: needs to move -0.16m (16cm down)
+
+        # End-effector frame
+        self._ee_frame = plant.GetFrameByName("follower_left_ee_gripper_link")
+        self._left_finger  = plant.GetFrameByName("follower_left_gripper_left")
+        self._right_finger = plant.GetFrameByName("follower_left_gripper_right")
+
+        ee_pose = self._ee_frame.CalcPoseInWorld(self._plant_context).translation()
+        lf_pose = self._left_finger.CalcPoseInWorld(self._plant_context).translation()
+        rf_pose = self._right_finger.CalcPoseInWorld(self._plant_context).translation()
+
+        finger_center = (lf_pose + rf_pose) / 2
+
+        # Offset from EE frame to the actual grasping point where the cube should be relative to EE
+        self._grasp_offset = finger_center - ee_pose  # Vector from EE origin to center between fingers (grasp point)
+
+        # Adjust the target positions by the offset
+        self._target_approach = self._cube_pos - self._grasp_offset + np.array([0, 0, 0.15])  # Hover above cube
+        # cube is 2cm tall, half of that is 1cm (0.01m), so we add that to the Z to ensure we are above the cube when grasping
+        self._target_grasp = self._cube_pos - self._grasp_offset + np.array([0, 0.05, 0.01])   # Position EE so cube is between fingers
+        self._target_lift = self._cube_pos - self._grasp_offset + np.array([0, 0, 0.15])  # Lift cube
+        self._target_transport = self._drop_pos - self._grasp_offset + np.array([0, 0, 0.15])  # Transport cube
+        self._target_drop = self._drop_pos - self._grasp_offset + np.array([0, 0.05, 0.01])   # Drop cube
+
+        # Print debug info about initial positions
+        print(f"cube position:   {self._cube_pos}")
+        print(f"EE origin:      {ee_pose}")
+        print(f"Left finger:    {lf_pose}")
+        print(f"Right finger:   {rf_pose}")
+        print(f"Finger center:  {finger_center}")
+        # print(f"  Finger vs target Y: {finger_center[1] - self._cube_pos[1]:.4f}  ← real Y error")
+        # print(f"  Finger vs target Z: {finger_center[2] - self._cube_pos[2]:.4f}  ← real Z error")
+        # print(f"Finger gap (Y):     {abs(lf_pose[1] - rf_pose[1]):.4f}m")
+        print(f"Offset EE→fingers: {finger_center - ee_pose}")        
+        print(f"\n{'='*60}")
+        print(f"GRIPPER CALIBRATION")
+        print(f"{'='*60}")
+        print(f"EE frame position:  {ee_pose}")
+        print(f"Grasp offset:       {self._grasp_offset}")
+        print(f"\nTarget positions (EE frame targets, not cube targets):")
+        print(f"  Approach: {self._target_approach}")
+        print(f"  Grasp:    {self._target_grasp}")
+        print(f"  Lift:     {self._target_lift}")
+        print(f"  Transport:{self._target_transport}")
+        print(f"  Drop:     {self._target_drop}")
+        
+        # Gripper control
+        self._gripper_open = 0.044   # Fully open
+        self._gripper_closed = 0.005 # Closed (grasping)
+        
+        # Downward-facing rotation: gripper X-axis points down (-Z world)
+        # Adjust based on gripper's resting direction
+        self._grasp_rotation = None #RotationMatrix.MakeYRotation(np.pi / 2)
+        
+        # State tracking
+        self._state = self.APPROACH
+        self._state_start_time = 0.0
+        self._phase_duration = 2.0  # seconds per phase (tune as needed)
+        
+        # IK solutions: computed once, interpolated during execution
+        self._q_start = None   # joint positions at start of current phase
+        self._q_target = None  # joint positions at end of current phase
+        self._phase_computed = False
+        
+        # Output port
+        self.DeclareVectorOutputPort("desired_positions", num_joints, self.CalcOutput)
+        
+        # State names for logging
+        self._state_names = ["APPROACH", "DESCEND", "GRASP", "LIFT",
+                             "TRANSPORT", "DROP", "RELEASE", "RESET"]
+    
+    def _get_left_arm_gripper_index(self):
+        """Left arm gripper is actuator index 6 (follower_left_left_carriage_joint)."""
+        return 6
+    
+    def _solve_ik_for_position(self, target_pos, q_current):
+        """Solve IK for a Cartesian target, starting from q_current."""
+        return solve_ik(
+            self._plant,
+            self._plant_context,
+            self._ee_frame,
+            target_pos,
+            target_rotation=self._grasp_rotation,
+            q0=q_current,
+        )
+    
+    def _get_target_for_state(self, state):
+        """Return the Cartesian target position for each state."""
+        targets = {
+            self.APPROACH:  self._target_approach,
+            self.DESCEND:   self._target_grasp,
+            self.GRASP:     self._target_grasp,    # stay in place, just close gripper
+            self.LIFT:      self._target_lift,
+            self.TRANSPORT: self._target_transport,
+            self.DROP:      self._target_drop,
+            self.RELEASE:   self._target_drop,    # stay in place, just open gripper
+            self.RESET:     self._target_approach, # return to neutral hover
+        }
+
+        return targets.get(state)
+    
+    def CalcOutput(self, context, output):
+        t = context.get_time()
+        
+        # Initialize on first call
+        if self._q_start is None:
+            self._q_start = self._plant.GetPositions(self._plant_context)
+            self._q_target = self._q_start.copy()
+            self._state_start_time = t
+        
+        # Compute IK for the current phase if not done yet
+        if not self._phase_computed:
+            self._phase_computed = True
+            target_pos = self._get_target_for_state(self._state)
+            print(f"[t={t:.2f}] Phase: {self._state_names[self._state]} -> target EE Position: {target_pos}")
+            
+            q_sol = self._solve_ik_for_position(target_pos, self._q_start)
+            
+            if q_sol is not None:
+                self._q_target = q_sol
+                # Update plant context so next IK starts from a good guess
+                self._plant.SetPositions(self._plant_context, q_sol)
+                print(f"  IK SUCCESS: Solution found")
+            else:
+                # IK failed: hold current position
+                self._q_target = self._q_start.copy()
+                print(f"  IK FAILED: Holding current position")
+        
+        # Interpolate between q_start and q_target
+        phase_t = (t - self._state_start_time) / self._phase_duration
+        phase_t = np.clip(phase_t, 0.0, 1.0)
+        # Smooth step: ease in/out
+        alpha = phase_t * phase_t * (3 - 2 * phase_t)
+        q_interp = (1 - alpha) * self._q_start + alpha * self._q_target
+        
+        # Override gripper position based on state
+        gripper_idx = self._get_left_arm_gripper_index()
+        if self._state in (self.GRASP, self.LIFT, self.TRANSPORT, self.DROP):
+            q_interp[gripper_idx] = self._gripper_closed
+        else:
+            q_interp[gripper_idx] = self._gripper_open
+        
+        # Write to output
+        for i in range(self._num_joints):
+            output[i] = q_interp[i]
+        
+        # Advance state machine when phase duration elapsed
+        if t - self._state_start_time >= self._phase_duration:
+            next_state = (self._state + 1) % (self.RESET + 1)
+            print(f"[t={t:.2f}] -> Transitioning to {self._state_names[next_state]}")
+            self._q_start = self._q_target.copy()
+            self._state = next_state
+            self._state_start_time = t
+            self._phase_computed = False
 
 
 # System to track and print gripper positions
@@ -163,12 +411,14 @@ def main():
     # Add a small cube to interact with
     Parser(plant).AddModels("urdf/cube.urdf")
 
-    # Set cube position to be just above the table, in front of the right arm
+    cube_position = [0.1, 0.15, 0.02]
+    drop_position = [0.1, -0.15, 0.02]  # Drop zone in front of right arm
+
+    # Set cube position to be just above the table, in front of the left arm
     cube_body = plant.GetBodyByName("cube_link")
     X = RigidTransform()
-    X.set_translation([0.1, 0.15, 0.02])
+    X.set_translation(cube_position)
     plant.SetDefaultFloatingBaseBodyPose(cube_body, X)
-
     plant.Finalize()
 
     # Enable hydroelastic contact
@@ -189,7 +439,7 @@ def main():
     meshcat.SetCameraPose([0.9, 0.0, 0.9], [0.0, 0.0, 0.4])
 
     # Inspect all frames to find gripper-related ones
-    gripper_frames, carriage_frames = inspect_frames(plant)
+    # gripper_frames, carriage_frames = inspect_frames(plant)
 
     # Get the number of actuators
     nu = len(plant.GetJointActuatorIndices())
@@ -202,14 +452,18 @@ def main():
         print(f"- {actuator.joint().name()}")
 
     # Creates instance of the controller and adds it to the diagram builder - outputs only 14 joints
-    trajectory_source = builder.AddSystem(DebugTrajectory(nu))
+    # trajectory_source = builder.AddSystem(DebugTrajectory(nu))
+
+    controller = builder.AddSystem(PickAndPlaceController(plant, nu, cube_position, drop_position))
 
     # Converts position commands to position + velocity commands
     # Robot's input port expects [position, velocities] (28 values total for 14 joints)
     state_interpolator = builder.AddSystem(StateInterpolatorWithDiscreteDerivative(nu, 0.01, True)) # 0.01 - time constant (how fast to compute velocities), True - suppresses initial velocity spike
 
+    builder.Connect(controller.get_output_port(0), state_interpolator.get_input_port())
+
     # Connect the controller to the plant's desired state input port.
-    builder.Connect(trajectory_source.get_output_port(0),state_interpolator.get_input_port())
+    # builder.Connect(trajectory_source.get_output_port(0),state_interpolator.get_input_port())
     builder.Connect(
         state_interpolator.get_output_port(),
         plant.get_desired_state_input_port(model_indices[0]),
@@ -223,27 +477,27 @@ def main():
     plant_context = plant.GetMyContextFromRoot(context)
 
     # Print initial gripper positions
-    print("INITIAL GRIPPER POSITIONS")
+    # print("INITIAL GRIPPER POSITIONS")
     
-    for frame_name in gripper_frames:
-        try:
-            frame = plant.GetFrameByName(frame_name)
-            pose = frame.CalcPoseInWorld(plant_context)
-            pos = pose.translation()
-            print(f"  {frame_name:30s} -> ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})")
-        except Exception as e:
-            print(f"  {frame_name:30s} -> ERROR: {e}")
+    # for frame_name in gripper_frames:
+    #     try:
+    #         frame = plant.GetFrameByName(frame_name)
+    #         pose = frame.CalcPoseInWorld(plant_context)
+    #         pos = pose.translation()
+    #         print(f"  {frame_name:30s} -> ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})")
+    #     except Exception as e:
+    #         print(f"  {frame_name:30s} -> ERROR: {e}")
     
-    print("CARRIAGE POSITIONS (these move with gripper)")
+    # print("CARRIAGE POSITIONS (these move with gripper)")
     
-    for frame_name in carriage_frames:
-        try:
-            frame = plant.GetFrameByName(frame_name)
-            pose = frame.CalcPoseInWorld(plant_context)
-            pos = pose.translation()
-            print(f"  {frame_name:30s} -> ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})")
-        except Exception as e:
-            print(f"  {frame_name:30s} -> ERROR: {e}")
+    # for frame_name in carriage_frames:
+    #     try:
+    #         frame = plant.GetFrameByName(frame_name)
+    #         pose = frame.CalcPoseInWorld(plant_context)
+    #         pos = pose.translation()
+    #         print(f"  {frame_name:30s} -> ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})")
+    #     except Exception as e:
+    #         print(f"  {frame_name:30s} -> ERROR: {e}")
 
     # Set up the simulator to use CENIC
     simulator = Simulator(diagram, context)
@@ -269,19 +523,19 @@ def main():
         EventStatus.Killed(diagram, "Simulation stopped by user.")
 
     # Print final positions
-    print("FINAL GRIPPER POSITIONS")
+    # print("FINAL GRIPPER POSITIONS")
     
     # Update plant context
-    plant_context = plant.GetMyContextFromRoot(simulator.get_context())
+    # plant_context = plant.GetMyContextFromRoot(simulator.get_context())
     
-    for frame_name in gripper_frames:
-        try:
-            frame = plant.GetFrameByName(frame_name)
-            pose = frame.CalcPoseInWorld(plant_context)
-            pos = pose.translation()
-            print(f"  {frame_name:30s} -> ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})")
-        except Exception as e:
-            print(f"  {frame_name:30s} -> ERROR: {e}")
+    # for frame_name in gripper_frames:
+    #     try:
+    #         frame = plant.GetFrameByName(frame_name)
+    #         pose = frame.CalcPoseInWorld(plant_context)
+    #         pos = pose.translation()
+    #         print(f"  {frame_name:30s} -> ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})")
+    #     except Exception as e:
+    #         print(f"  {frame_name:30s} -> ERROR: {e}")
 
 if __name__ == "__main__":
     main()
