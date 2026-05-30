@@ -4,3 +4,4 @@ __pycache__
 .vscode/
 .venv/
 t_arm_drake/
+simulation_frames/

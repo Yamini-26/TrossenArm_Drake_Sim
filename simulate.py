@@ -9,6 +9,7 @@
 from typing import List
 from functools import partial
 
+import os
 import numpy as np
 from pydrake.all import (
     StartMeshcat,
@@ -32,8 +33,61 @@ from pydrake.all import (
     InverseKinematics,
     RotationMatrix,
     Solve,
+    RgbdSensor,
+    CameraInfo,
+    ClippingRange,
+    DepthRange,
+    DepthRenderCamera,
+    ColorRenderCamera,
+    RenderCameraCore,
+    MakeRenderEngineVtk,
+    RenderEngineVtkParams,
+    AbstractValue,
+    ImageRgba8U,
 )
 from pydrake.common.yaml import yaml_load_file
+from PIL import Image 
+
+
+# Camera specs matching real Intel RealSense D405 hardware
+CAM_WIDTH  = 640
+CAM_HEIGHT = 480
+CAM_FOCAL  = 605.0   # D405 focal length in pixels at 640×480
+ 
+# Map logical camera names → the URDF color optical frame names
+# Use the color_optical_frame because:
+#   1. It is the true optical centre of the RGB sensor
+#   2. Drake's RgbdSensor uses the same convention (Z forward, X right, Y down)
+#   3. The URDF already applies the ROS→optical rotation (-pi/2, 0, -pi/2) so no extra rotation transform is needed
+CAMERA_FRAME_MAP = {
+    "cam_high":         "cam_high_color_optical_frame",
+    "cam_low":          "cam_low_color_optical_frame",
+    "cam_left_wrist":   "follower_left_camera_color_optical_frame",
+    "cam_right_wrist":  "follower_right_camera_color_optical_frame",
+}
+
+# def inspect_camera_frames(plant):
+#     """
+#     Print all frames for camera
+#     Extract frame names from URDF so that RgbdSensors can be attached to them
+#     """
+#     print("\n" + "=" * 60)
+#     print("CAMERA / SENSOR FRAMES IN URDF")
+#     print("=" * 60)
+#     camera_keywords = ["cam", "camera", "realsense", "sensor", "optical"]
+#     found = []
+#     for i in range(plant.num_frames()):
+#         frame = plant.get_frame(FrameIndex(i))
+#         name = frame.name().lower()
+#         if any(kw in name for kw in camera_keywords):
+#             found.append(frame.name())
+#     if found:
+#         for f in found:
+#             print(f"  {f}")
+#     else:
+#         print("  (none found)")
+#     print("=" * 60 + "\n")
+#     return found
 
 
 def solve_ik(plant, plant_context, ee_frame, target_position, target_rotation=None, q0=None):
@@ -401,10 +455,136 @@ class DebugTrajectory(LeafSystem):
                 output[i] = 0.0
 
 
+class ImageSaver(LeafSystem):
+    """Save frames from one RgbdSensor color port to disk."""
+ 
+    def __init__(self, camera_name, save_dir,
+                 save_interval=0.5, width=CAM_WIDTH, height=CAM_HEIGHT):
+        LeafSystem.__init__(self)
+        self._camera_name = camera_name
+        self._save_dir    = os.path.join(save_dir, camera_name)
+        self._frame_count = 0
+        self._width       = width
+        self._height      = height
+        os.makedirs(self._save_dir, exist_ok=True)
+ 
+        self._image_port = self.DeclareAbstractInputPort(
+            "color_image",
+            AbstractValue.Make(ImageRgba8U(width, height))
+        )
+        self.DeclarePeriodicPublishEvent(save_interval, 0.0, self._save_image)
+        print(f"  [{camera_name}] → '{self._save_dir}/' every {save_interval}s")
+ 
+    def _save_image(self, context):
+        try:
+            image = self._image_port.Eval(context)
+        except Exception as e:
+            print(f"  [{self._camera_name}] WARNING: {e}")
+            return
+        img_array = np.frombuffer(image.data, dtype=np.uint8)
+        img_array = img_array.reshape((self._height, self._width, 4))
+        filename  = os.path.join(self._save_dir, f"frame_{self._frame_count:05d}.png")
+        Image.fromarray(img_array[:, :, :3], mode="RGB").save(filename)
+        self._frame_count += 1
+        t = context.get_time()
+        if self._frame_count % 10 == 0:
+            print(f"  [{self._camera_name}] frame {self._frame_count} t={t:.2f}s")
+ 
+ 
+# Cameras from URDF-frame-based attachment
+ 
+def add_cameras_from_urdf(builder, plant, scene_graph, renderer_name,
+                           save_dir="simulation_frames", save_interval=0.5):
+    """
+    Attach one RgbdSensor per camera using the exact body frame from the URDF.
+ 
+    For each camera:
+      1. Get the named frame from the plant (e.g. cam_high_color_optical_frame)
+      2. Get the body that frame is welded to (the parent link)
+      3. Compute X_BF: the fixed transform from that body's origin to the frame
+      4. Pass parent body's frame_id + X_BF to RgbdSensor
+ 
+    This means:
+      - cam_high / cam_low: fixed to the robot frame → world-fixed
+      - cam_left/right_wrist: fixed to follower link_6 → move with the arm
+    """
+    cam_info = CameraInfo(
+        width=CAM_WIDTH, height=CAM_HEIGHT,
+        focal_x=CAM_FOCAL, focal_y=CAM_FOCAL,
+        center_x=CAM_WIDTH / 2.0, center_y=CAM_HEIGHT / 2.0,
+    )
+    color_cam = ColorRenderCamera(
+        RenderCameraCore(renderer_name, cam_info,
+                         ClippingRange(0.01, 10.0), RigidTransform()),
+        show_window=False,
+    )
+    depth_cam = DepthRenderCamera(
+        RenderCameraCore(renderer_name, cam_info,
+                         ClippingRange(0.01, 10.0), RigidTransform()),
+        DepthRange(0.01, 10.0),
+    )
+ 
+    sensors = {}
+    print("\nAdding cameras from URDF frames:")
+ 
+    for cam_name, frame_name in CAMERA_FRAME_MAP.items():
+        # Step 1: get the Drake frame object
+        urdf_frame = plant.GetFrameByName(frame_name)
+ 
+        # Step 2: get the body this frame lives on and its scene-graph frame id
+        parent_body    = urdf_frame.body()
+        parent_frame_id = plant.GetBodyFrameIdOrThrow(parent_body.index())
+ 
+        # Step 3: fixed transform from body origin → optical frame
+        #   GetFixedPoseInBodyFrame() walks the fixed joint chain and gives
+        #   us X_BF without needing any context (it's purely kinematic/fixed)
+        X_BF = urdf_frame.GetFixedPoseInBodyFrame()
+ 
+        # Step 4: create sensor parented to the body frame
+        sensor = builder.AddSystem(RgbdSensor(
+            parent_id=parent_frame_id,
+            X_PB=X_BF,               # pose of sensor IN the parent body frame
+            color_camera=color_cam,
+            depth_camera=depth_cam,
+        ))
+        sensor.set_name(f"rgbd_{cam_name}")
+ 
+        builder.Connect(
+            scene_graph.get_query_output_port(),
+            sensor.query_object_input_port(),
+        )
+ 
+        saver = builder.AddSystem(
+            ImageSaver(cam_name, save_dir, save_interval)
+        )
+        builder.Connect(
+            sensor.color_image_output_port(),
+            saver.get_input_port(0),
+        )
+ 
+        sensors[cam_name] = sensor
+ 
+        # Print where this camera actually lives in world at home pose
+        default_ctx = plant.CreateDefaultContext()
+        X_WF = urdf_frame.CalcPoseInWorld(default_ctx)
+        pos  = X_WF.translation()
+        fwd  = X_WF.rotation().matrix() @ np.array([0, 0, 1])  # optical Z = forward
+        print(f"  {cam_name:20s} frame='{frame_name}'")
+        print(f"    world pos (home): [{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}]")
+        print(f"    optical fwd (Z):  [{fwd[0]:.3f}, {fwd[1]:.3f}, {fwd[2]:.3f}]")
+        print(f"    parent body:      '{parent_body.name()}'")
+ 
+    return sensors
+
+
 def main():
     # Load the robot model.
     builder = DiagramBuilder()
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.0)
+
+    # Add a render engine to the scene graph (needed for camera rendering)
+    renderer_name = "renderer"
+    scene_graph.AddRenderer(renderer_name, MakeRenderEngineVtk(RenderEngineVtkParams()))
     
     # Parse the URDF model of the robot and add it to the plant
     model_indices = Parser(plant).AddModels("urdf/stationary_ai.urdf")
@@ -421,10 +601,21 @@ def main():
     plant.SetDefaultFloatingBaseBodyPose(cube_body, X)
     plant.Finalize()
 
+    # inspect_camera_frames(plant)  # Print camera-related frames to find names for Phase 2
+
     # Enable hydroelastic contact
     scene_graph_config = SceneGraphConfig()
     scene_graph_config.default_proximity_properties.compliance_type = "compliant"
     scene_graph.set_config(scene_graph_config)
+
+# ── Add all 4 Trossen cameras ──
+    print("\nAdding cameras:")
+    cameras = add_cameras_from_urdf(
+        builder, plant, scene_graph,
+        renderer_name=renderer_name,
+        save_dir="simulation_frames",
+        save_interval=0.5,
+    )
 
     # Set up meshcat visualization
     meshcat = StartMeshcat()
@@ -446,10 +637,10 @@ def main():
     print(f"Number of actuators: {nu}")
 
     # Actuator names in order
-    print(f"Joint actuators found:")
-    for actuator_index in plant.GetJointActuatorIndices():
-        actuator = plant.get_joint_actuator(actuator_index)
-        print(f"- {actuator.joint().name()}")
+    # print(f"Joint actuators found:")
+    # for actuator_index in plant.GetJointActuatorIndices():
+    #     actuator = plant.get_joint_actuator(actuator_index)
+    #     print(f"- {actuator.joint().name()}")
 
     # Creates instance of the controller and adds it to the diagram builder - outputs only 14 joints
     # trajectory_source = builder.AddSystem(DebugTrajectory(nu))
@@ -459,6 +650,7 @@ def main():
     # Converts position commands to position + velocity commands
     # Robot's input port expects [position, velocities] (28 values total for 14 joints)
     state_interpolator = builder.AddSystem(StateInterpolatorWithDiscreteDerivative(nu, 0.01, True)) # 0.01 - time constant (how fast to compute velocities), True - suppresses initial velocity spike
+        # Add image saver — saves a frame every 0.5 seconds
 
     builder.Connect(controller.get_output_port(0), state_interpolator.get_input_port())
 
