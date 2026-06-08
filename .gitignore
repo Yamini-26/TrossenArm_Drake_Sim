@@ -5,3 +5,4 @@ __pycache__
 .venv/
 t_arm_drake/
 simulation_frames/
+dino_features/

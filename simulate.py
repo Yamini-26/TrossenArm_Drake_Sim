@@ -11,6 +11,8 @@ from functools import partial
 
 import os
 import numpy as np
+import xml.etree.ElementTree as ET
+
 from pydrake.all import (
     StartMeshcat,
     DiagramBuilder,
@@ -576,8 +578,112 @@ def add_cameras_from_urdf(builder, plant, scene_graph, renderer_name,
  
     return sensors
 
+def load_cube_urdf(mass: float, friction: float) -> str:
+    tree = ET.parse("urdf/cube.urdf")
+    root = tree.getroot()
+    
+    # Update mass
+    root.find(".//mass").set("value", str(mass))
+    
+    # Update inertia (uniform cube: I = m * side² / 6)
+    side = 0.02
+    I = mass * side**2 / 6.0
+    inertia = root.find(".//inertia")
+    for attr in ["ixx", "iyy", "izz"]:
+        inertia.set(attr, f"{I:.6e}")
+    for attr in ["ixy", "ixz", "iyz"]:
+        inertia.set(attr, "0")
+    
+    # Add/update friction (Drake reads this from <contact> inside <collision>)
+    collision = root.find(".//collision")
+    contact = collision.find("contact")
+    if contact is None:
+        contact = ET.SubElement(collision, "contact")
+    
+    def set_or_create(parent, tag, value):
+        el = parent.find(tag)
+        if el is None:
+            el = ET.SubElement(parent, tag)
+        el.set("value", str(value))
+    
+    set_or_create(contact, "lateral_friction",  friction)
+    set_or_create(contact, "rolling_friction",  0.001)
+    set_or_create(contact, "spinning_friction", 0.001)
+    
+    return ET.tostring(root, encoding="unicode")
 
-def main():
+# def load_follower_urdf(joint_damping: float, gripper_friction: float) -> str:
+#     urdf_path = os.path.abspath("urdf/stationary_ai_processed.urdf")
+#     urdf_dir  = os.path.dirname(urdf_path)
+    
+#     tree = ET.parse(urdf_path)
+#     root = tree.getroot()
+    
+#     # ── Fix all relative mesh/texture paths → absolute ────────────────────
+#     # Drake can't resolve "../meshes/..." when loading from a string
+#     for el in root.iter():
+#         for attr in ("filename", "uri"):
+#             val = el.get(attr)
+#             if val and not os.path.isabs(val) and not val.startswith("package://"):
+#                 abs_path = os.path.normpath(os.path.join(urdf_dir, val))
+#                 el.set(attr, abs_path)
+    
+#     # ── Joint damping ─────────────────────────────────────────────────────
+#     arm_joints = ["follower_left_joint_0",  "follower_left_joint_1",
+#                   "follower_left_joint_2",  "follower_left_joint_3",
+#                   "follower_left_joint_4",  "follower_left_joint_5"]
+    
+#     for joint_name in arm_joints:
+#         joint = root.find(f".//joint[@name='{joint_name}']")
+#         if joint is not None:
+#             dynamics = joint.find("dynamics")
+#             if dynamics is None:
+#                 dynamics = ET.SubElement(joint, "dynamics")
+#             dynamics.set("damping", str(joint_damping))
+#             dynamics.set("friction", "0.0")
+#         else:
+#             print(f"  WARNING: joint '{joint_name}' not found in URDF")
+    
+#     # ── Gripper friction ──────────────────────────────────────────────────
+#     for link_name in ["follower_left_gripper_left", "follower_left_gripper_right"]:
+#         link = root.find(f".//link[@name='{link_name}']")
+#         if link is not None:
+#             collision = link.find("collision")
+#             if collision is not None:
+#                 contact = collision.find("contact")
+#                 if contact is None:
+#                     contact = ET.SubElement(collision, "contact")
+#                 for tag, val in [("lateral_friction",  gripper_friction),
+#                                   ("rolling_friction",  0.001),
+#                                   ("spinning_friction", 0.001)]:
+#                     el = contact.find(tag)
+#                     if el is None:
+#                         el = ET.SubElement(contact, tag)
+#                     el.set("value", str(val))
+#         else:
+#             print(f"  WARNING: link '{link_name}' not found in URDF")
+    
+#     return ET.tostring(root, encoding="unicode")
+
+SIM_A = {
+    "save_dir":        "frames_sim_a",
+    "cube_mass":       0.01,
+    "cube_friction":   0.8,
+    # "joint_damping":   0.0,
+    # "gripper_friction": 1.0,
+    "sim_duration":    15.0,
+}
+
+SIM_B = {
+    "save_dir":        "frames_sim_b",
+    "cube_mass":       0.03,
+    "cube_friction":   0.5,
+    # "joint_damping":   0.3,
+    # "gripper_friction": 0.4,
+    "sim_duration":    15.0,
+}
+
+def run_simulation(config: dict):
     # Load the robot model.
     builder = DiagramBuilder()
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.0)
@@ -587,9 +693,12 @@ def main():
     scene_graph.AddRenderer(renderer_name, MakeRenderEngineVtk(RenderEngineVtkParams()))
     
     # Parse the URDF model of the robot and add it to the plant
+    # follower_urdf_str = load_follower_urdf(config["joint_damping"],config["gripper_friction"])
+    # model_indices = Parser(plant).AddModelsFromString(follower_urdf_str, "urdf")
     model_indices = Parser(plant).AddModels("urdf/stationary_ai.urdf")
     # Add a small cube to interact with
-    Parser(plant).AddModels("urdf/cube.urdf")
+    cube_urdf_str = load_cube_urdf(config["cube_mass"], config["cube_friction"])
+    Parser(plant).AddModelsFromString(cube_urdf_str, "urdf")
 
     cube_position = [0.1, 0.15, 0.02]
     drop_position = [0.1, -0.15, 0.02]  # Drop zone in front of right arm
@@ -613,7 +722,7 @@ def main():
     cameras = add_cameras_from_urdf(
         builder, plant, scene_graph,
         renderer_name=renderer_name,
-        save_dir="simulation_frames",
+        save_dir=config["save_dir"],
         save_interval=0.5,
     )
 
@@ -693,13 +802,13 @@ def main():
 
     # Set up the simulator to use CENIC
     simulator = Simulator(diagram, context)
-    config = SimulatorConfig()
-    config.integration_scheme = "cenic"
-    config.accuracy = 1e-3
-    config.max_step_size = 0.1
-    config.use_error_control = True
-    config.publish_every_time_step = True
-    ApplySimulatorConfig(config, simulator)
+    sim_config = SimulatorConfig()
+    sim_config.integration_scheme = "cenic"
+    sim_config.accuracy = 1e-3
+    sim_config.max_step_size = 0.1
+    sim_config.use_error_control = True
+    sim_config.publish_every_time_step = True
+    ApplySimulatorConfig(sim_config, simulator)
     simulator.set_target_realtime_rate(1.0)
     simulator.Initialize()
 
@@ -710,7 +819,7 @@ def main():
     print("Press Ctrl+C to stop the simulation.")
 
     try:
-        simulator.AdvanceTo(np.inf)
+        simulator.AdvanceTo(config["sim_duration"])
     except KeyboardInterrupt:
         EventStatus.Killed(diagram, "Simulation stopped by user.")
 
@@ -730,4 +839,5 @@ def main():
     #         print(f"  {frame_name:30s} -> ERROR: {e}")
 
 if __name__ == "__main__":
-    main()
+    run_simulation(SIM_A)
+    run_simulation(SIM_B)

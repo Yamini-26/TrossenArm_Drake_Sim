@@ -1,5 +1,5 @@
 <?xml version="1.0" ?>
-<robot name="stationary_ai" xmlns:drake="http://drake.mit.edu">
+<robot name="stationary_ai">
   <!-- trossen_black -->
   <!-- maple_tabletop -->
   <!-- wxai -->
