@@ -1,15 +1,12 @@
 #!/usr/bin/env python
 
-##
-#
 # Run a simple automatic controller simulation of the Trossen Stationary bimanual robot.
-#
-##
 
 from typing import List
 from functools import partial
 
 import os
+import time
 import numpy as np
 import xml.etree.ElementTree as ET
 
@@ -46,6 +43,8 @@ from pydrake.all import (
     RenderEngineVtkParams,
     AbstractValue,
     ImageRgba8U,
+    LightParameter,
+    Rgba
 )
 from pydrake.common.yaml import yaml_load_file
 from PIL import Image 
@@ -666,21 +665,39 @@ def load_cube_urdf(mass: float, friction: float) -> str:
 #     return ET.tostring(root, encoding="unicode")
 
 SIM_A = {
-    "save_dir":        "frames_sim_a",
+    "save_dir":        f"simulation_frames/frames_sim_a_{int(time.time())}",
     "cube_mass":       0.01,
     "cube_friction":   0.8,
     # "joint_damping":   0.0,
     # "gripper_friction": 1.0,
     "sim_duration":    15.0,
+    "lights": [
+        LightParameter(
+            type="directional",
+            direction=[0.5, -0.5, -1.0],   # points down-right into scene
+            color=Rgba(1.0, 0.95, 0.85, 1.0),  # warm white
+            intensity=2.5,
+            frame="world",
+        )
+    ],
 }
 
 SIM_B = {
-    "save_dir":        "frames_sim_b",
+    "save_dir":        f"simulation_frames/frames_sim_b_{int(time.time())}",
     "cube_mass":       0.03,
     "cube_friction":   0.5,
     # "joint_damping":   0.3,
     # "gripper_friction": 0.4,
     "sim_duration":    15.0,
+    "lights": [
+        LightParameter(
+            type="directional",
+            direction=[0.0, 0.0, -1.0],    # straight down
+            color=Rgba(0.7, 0.8, 1.0, 1.0),  # cool blue-white
+            intensity=0.8,
+            frame="world",
+        )
+    ],
 }
 
 def run_simulation(config: dict):
@@ -690,7 +707,17 @@ def run_simulation(config: dict):
 
     # Add a render engine to the scene graph (needed for camera rendering)
     renderer_name = "renderer"
-    scene_graph.AddRenderer(renderer_name, MakeRenderEngineVtk(RenderEngineVtkParams()))
+
+    # For default camera lighting rendering
+    # scene_graph.AddRenderer(renderer_name, MakeRenderEngineVtk(RenderEngineVtkParams()))
+
+    # For custom lighting rendering from config 
+    light_cfg = config.get("lights", [])
+    renderer_params = RenderEngineVtkParams()
+    renderer_params.lights = light_cfg
+    renderer = MakeRenderEngineVtk(renderer_params)
+    scene_graph.AddRenderer(renderer_name, renderer)
+    
     
     # Parse the URDF model of the robot and add it to the plant
     # follower_urdf_str = load_follower_urdf(config["joint_damping"],config["gripper_friction"])
@@ -819,7 +846,10 @@ def run_simulation(config: dict):
     print("Press Ctrl+C to stop the simulation.")
 
     try:
+        meshcat.StartRecording()
         simulator.AdvanceTo(config["sim_duration"])
+        meshcat.StopRecording()
+        meshcat.PublishRecording()
     except KeyboardInterrupt:
         EventStatus.Killed(diagram, "Simulation stopped by user.")
 
