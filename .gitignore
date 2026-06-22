@@ -6,3 +6,4 @@ __pycache__
 t_arm_drake/
 simulation_frames/
 dino_features/
+energy_comparison/
