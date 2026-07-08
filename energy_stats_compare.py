@@ -1,22 +1,4 @@
 #!/usr/bin/env python
-"""
-Energy Statistics Feature Comparator for sim-to-sim comparison.
-
-Loads pre-extracted .npy DINOv2 feature files from two simulation runs and computes:
-  1. Two-sample Energy Distance — E(X,Y) per camera
-  2. Normalized energy statistic T_{n1,n2} — for scale-invariant comparison
-  3. Per-frame CLS cosine similarity timeline — WHEN views diverge
-  4. PCA visualisation of feature distributions — WHERE features cluster
-
-Energy Distance formula:
-  E_{n1,n2}(X,Y) = (2/(n1*n2)) * Σ|Xi - Ym| - (1/n1²)   * Σ|Xi - Xj| - (1/n2²)   * Σ|Yl - Ym|
-
-  T_{n1,n2} = (n1*n2 / (n1+n2)) * E_{n1,n2}   ← test statistic
-
-Usage
-  python energy_stats_comparator.py --features_a  dino_features/features_sim_a --features_b  dino_features/features_sim_b --output energy_comparison
-"""
-
 import os
 import argparse
 import json
@@ -98,7 +80,7 @@ def pairwise_l2_mean(A: np.ndarray, B: np.ndarray) -> float:
     return float(np.mean(np.sqrt(D2)))
 
 
-def energy_distance(X: np.ndarray, Y: np.ndarray, n_samples: int = 500, seed: int = 0) -> Dict[str, float]:
+def energy_distance(X: np.ndarray, Y: np.ndarray, n_samples: int = 200, seed: int = 0) -> Dict[str, float]:
     """
     Two-sample energy distance and test statistic T_{n1,n2}.
 
@@ -112,8 +94,8 @@ def energy_distance(X: np.ndarray, Y: np.ndarray, n_samples: int = 500, seed: in
 
     Returns
     dict with keys:
-        'energy_distance'   : E_{n1,n2}  (Eq. 6.1) — 0 means identical distributions
-        'test_statistic'    : T_{n1,n2}  — scale-adjusted version for hypothesis testing
+        'energy_distance'   : E_{n1,n2} — 0 means identical distributions
+        'test_statistic'    : T_{n1,n2} — scale-adjusted version for hypothesis testing
         'cross_term'        : 2·E|Xi-Ym|   (between-run term)
         'within_A'          : E|Xi-Xj|     (within run A spread)
         'within_B'          : E|Yl-Ym|     (within run B spread)
@@ -362,6 +344,9 @@ def main():
         all_cos_sims[cam] = cos_sim
         print(f"    cos sim  mean={cos_sim.mean():.4f}  min={cos_sim.min():.4f}  "
               f"(over {len(cos_sim)} aligned frames)")
+        cos_sim_path = output_dir / f"cos_sim_{cam}.npy"
+        np.save(cos_sim_path, cos_sim)
+        print(f"    Saved cos_sim → {cos_sim_path}")
 
         # 3. PCA plot
         plot_pca(cls_a, cls_b, cam, output_dir / f"pca_{cam}.png")

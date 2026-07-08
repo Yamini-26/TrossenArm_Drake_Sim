@@ -5,6 +5,7 @@
 from typing import List
 from functools import partial
 
+import json
 import os
 import time
 import numpy as np
@@ -47,7 +48,8 @@ from pydrake.all import (
     Rgba
 )
 from pydrake.common.yaml import yaml_load_file
-from PIL import Image 
+from PIL import Image
+from pydrake.systems.primitives import LogVectorOutput
 
 
 # Camera specs matching real Intel RealSense D405 hardware
@@ -738,6 +740,10 @@ def run_simulation(config: dict):
     plant.Finalize()
 
     # inspect_camera_frames(plant)  # Print camera-related frames to find names for Phase 2
+    position_names = plant.GetPositionNames()
+    print("Position names and their order in q:")
+    for i, name in enumerate(position_names):
+        print(f"  Index {i:2d}: {name}")
 
     # Enable hydroelastic contact
     scene_graph_config = SceneGraphConfig()
@@ -797,6 +803,9 @@ def run_simulation(config: dict):
         plant.get_desired_state_input_port(model_indices[0]),
     )
 
+    state_logger = LogVectorOutput(plant.get_state_output_port(), builder)
+    state_logger.set_name("state_logger")
+
     # Build daigram
     diagram = builder.Build()
     context = diagram.CreateDefaultContext()
@@ -848,6 +857,49 @@ def run_simulation(config: dict):
     try:
         meshcat.StartRecording()
         simulator.AdvanceTo(config["sim_duration"])
+        diagram_context = simulator.get_context()
+        state_log  = state_logger.FindLog(diagram_context)
+        
+        log_times  = state_log.sample_times()   # (T,)
+        state_data = state_log.data()   # (nq+nv, T)
+        
+        # Slice out joint positions
+        nq = plant.num_positions()
+        nv = plant.num_velocities()
+        
+        # state_data rows:  0..nq-1 = positions q,  nq..nq+nv-1 = velocities v
+        q_log = state_data[:nq, :].T    # (T, nq)  — transpose to row-per-timestep
+        
+        # Forward kinematics — EE and cube position at each timestep
+        ee_frame  = plant.GetFrameByName("follower_left_ee_gripper_link")
+        cube_body = plant.GetBodyByName("cube_link")
+        tmp_ctx   = plant.CreateDefaultContext()
+        
+        ee_pos_log  = np.zeros((len(log_times), 3))
+        obj_pos_log = np.zeros((len(log_times), 3))
+        
+        for i, q in enumerate(q_log):
+            plant.SetPositions(tmp_ctx, q)
+            ee_pos_log[i]  = ee_frame.CalcPoseInWorld(tmp_ctx).translation()
+            obj_pos_log[i] = cube_body.EvalPoseInWorld(tmp_ctx).translation()
+        
+        # Save
+        save_dir = config["save_dir"]
+        os.makedirs(save_dir, exist_ok=True)
+        
+        np.savez_compressed(
+            os.path.join(save_dir, "trajectory_states.npz"),
+            times   = log_times,    # (T,)
+            q       = q_log,        # (T, nq)
+            ee_pos  = ee_pos_log,   # (T, 3)
+            obj_pos = obj_pos_log,  # (T, 3)
+        )
+        
+        with open(os.path.join(save_dir, "trajectory_meta.json"), "w") as f:
+            json.dump({"nq": nq, "nv": nv, "n_frames": len(log_times)}, f, indent=2)
+        
+        print(f"  [StateLog] Saved {len(log_times)} timesteps → {save_dir}/trajectory_states.npz")
+        print(f"  [StateLog] state_data shape: {state_data.shape}  (nq+nv={nq+nv}, T={len(log_times)})")
         meshcat.StopRecording()
         meshcat.PublishRecording()
     except KeyboardInterrupt:
