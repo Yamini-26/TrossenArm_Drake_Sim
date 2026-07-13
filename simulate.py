@@ -877,6 +877,7 @@ def run_simulation(config: dict):
         
         ee_pos_log  = np.zeros((len(log_times), 3))
         obj_pos_log = np.zeros((len(log_times), 3))
+        obj_quat_log = q_log[:, nq-7 : nq-3]    # (T, 4)  [qw, qx, qy, qz]
         
         for i, q in enumerate(q_log):
             plant.SetPositions(tmp_ctx, q)
@@ -893,6 +894,7 @@ def run_simulation(config: dict):
             q       = q_log,        # (T, nq)
             ee_pos  = ee_pos_log,   # (T, 3)
             obj_pos = obj_pos_log,  # (T, 3)
+            obj_quat = obj_quat_log, # (T, 4)
         )
         
         with open(os.path.join(save_dir, "trajectory_meta.json"), "w") as f:
