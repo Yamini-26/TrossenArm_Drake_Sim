@@ -164,7 +164,8 @@ class PickAndPlaceController(LeafSystem):
     RELEASE   = 6  # Open gripper
     RESET     = 7  # Return to home
     
-    def __init__(self, plant, num_joints, cube_position, drop_position):
+    def __init__(self, plant, num_joints, cube_position, drop_position, phase_duration=2.0, grasp_offset_error=None,
+                 gripper_closed_override=None, force_open_states=None):
         LeafSystem.__init__(self)
         self._plant = plant
         self._plant_context = plant.CreateDefaultContext()
@@ -173,6 +174,8 @@ class PickAndPlaceController(LeafSystem):
         # Key positions
         self._cube_pos = np.array(cube_position)
         self._drop_pos = np.array(drop_position)
+
+        self._grasp_offset_error = np.array(grasp_offset_error, dtype=float) if grasp_offset_error is not None else np.zeros(3)
 
         # Positions that we know from inspecting the model:
         #   EE frame position: (-0.020, 0.204, 0.183)
@@ -207,30 +210,32 @@ class PickAndPlaceController(LeafSystem):
         self._target_drop = self._drop_pos - self._grasp_offset + np.array([0, 0.05, 0.01])   # Drop cube
 
         # Print debug info about initial positions
-        print(f"cube position:   {self._cube_pos}")
-        print(f"EE origin:      {ee_pose}")
-        print(f"Left finger:    {lf_pose}")
-        print(f"Right finger:   {rf_pose}")
-        print(f"Finger center:  {finger_center}")
-        # print(f"  Finger vs target Y: {finger_center[1] - self._cube_pos[1]:.4f}  ← real Y error")
-        # print(f"  Finger vs target Z: {finger_center[2] - self._cube_pos[2]:.4f}  ← real Z error")
-        # print(f"Finger gap (Y):     {abs(lf_pose[1] - rf_pose[1]):.4f}m")
-        print(f"Offset EE→fingers: {finger_center - ee_pose}")        
-        print(f"\n{'='*60}")
-        print(f"GRIPPER CALIBRATION")
-        print(f"{'='*60}")
-        print(f"EE frame position:  {ee_pose}")
-        print(f"Grasp offset:       {self._grasp_offset}")
-        print(f"\nTarget positions (EE frame targets, not cube targets):")
-        print(f"  Approach: {self._target_approach}")
-        print(f"  Grasp:    {self._target_grasp}")
-        print(f"  Lift:     {self._target_lift}")
-        print(f"  Transport:{self._target_transport}")
-        print(f"  Drop:     {self._target_drop}")
+        # print(f"cube position:   {self._cube_pos}")
+        # print(f"EE origin:      {ee_pose}")
+        # print(f"Left finger:    {lf_pose}")
+        # print(f"Right finger:   {rf_pose}")
+        # print(f"Finger center:  {finger_center}")
+        # # print(f"  Finger vs target Y: {finger_center[1] - self._cube_pos[1]:.4f}  ← real Y error")
+        # # print(f"  Finger vs target Z: {finger_center[2] - self._cube_pos[2]:.4f}  ← real Z error")
+        # # print(f"Finger gap (Y):     {abs(lf_pose[1] - rf_pose[1]):.4f}m")
+        # print(f"Offset EE→fingers: {finger_center - ee_pose}")        
+        # print(f"\n{'='*60}")
+        # print(f"GRIPPER CALIBRATION")
+        # print(f"{'='*60}")
+        # print(f"EE frame position:  {ee_pose}")
+        # print(f"Grasp offset:       {self._grasp_offset}")
+        # print(f"\nTarget positions (EE frame targets, not cube targets):")
+        # print(f"  Approach: {self._target_approach}")
+        # print(f"  Grasp:    {self._target_grasp}")
+        # print(f"  Lift:     {self._target_lift}")
+        # print(f"  Transport:{self._target_transport}")
+        # print(f"  Drop:     {self._target_drop}")
         
         # Gripper control
         self._gripper_open = 0.044   # Fully open
-        self._gripper_closed = 0.005 # Closed (grasping)
+        self._gripper_closed = (gripper_closed_override
+                                 if gripper_closed_override is not None
+                                 else 0.005) # Closed (grasping)
         
         # Downward-facing rotation: gripper X-axis points down (-Z world)
         # Adjust based on gripper's resting direction
@@ -239,7 +244,22 @@ class PickAndPlaceController(LeafSystem):
         # State tracking
         self._state = self.APPROACH
         self._state_start_time = 0.0
-        self._phase_duration = 2.0  # seconds per phase (tune as needed)
+        self._phase_duration = phase_duration  # seconds per phase (tune as needed)
+
+        # Phases during which the gripper is forced OPEN regardless of the
+        # normal grasp/lift/transport/drop logic below -> deliberate drop.
+        # force_open_states is a list of phase-name strings, e.g. ["TRANSPORT"].
+        self._force_open_state_ids = set()
+        if force_open_states:
+            name_to_id = {"APPROACH": self.APPROACH, "DESCEND": self.DESCEND,
+                          "GRASP": self.GRASP, "LIFT": self.LIFT,
+                          "TRANSPORT": self.TRANSPORT, "DROP": self.DROP,
+                          "RELEASE": self.RELEASE, "RESET": self.RESET}
+            for name in force_open_states:
+                if name in name_to_id:
+                    self._force_open_state_ids.add(name_to_id[name])
+                else:
+                    print(f"  [WARN] force_open_states: unknown phase '{name}', ignoring")
         
         # IK solutions: computed once, interpolated during execution
         self._q_start = None   # joint positions at start of current phase
@@ -319,7 +339,11 @@ class PickAndPlaceController(LeafSystem):
         
         # Override gripper position based on state
         gripper_idx = self._get_left_arm_gripper_index()
-        if self._state in (self.GRASP, self.LIFT, self.TRANSPORT, self.DROP):
+        if self._state in self._force_open_state_ids:
+            # Deliberate drop: force open even though the normal logic below
+            # would otherwise keep the gripper closed during this phase.
+            q_interp[gripper_idx] = self._gripper_open
+        elif self._state in (self.GRASP, self.LIFT, self.TRANSPORT, self.DROP):
             q_interp[gripper_idx] = self._gripper_closed
         else:
             q_interp[gripper_idx] = self._gripper_open
@@ -528,7 +552,7 @@ def add_cameras_from_urdf(builder, plant, scene_graph, renderer_name,
     )
  
     sensors = {}
-    print("\nAdding cameras from URDF frames:")
+    # print("\nAdding cameras from URDF frames:")
  
     for cam_name, frame_name in CAMERA_FRAME_MAP.items():
         # Step 1: get the Drake frame object
@@ -666,43 +690,271 @@ def load_cube_urdf(mass: float, friction: float) -> str:
     
 #     return ET.tostring(root, encoding="unicode")
 
-SIM_A = {
-    "save_dir":        f"simulation_frames/frames_sim_a_{int(time.time())}",
-    "cube_mass":       0.01,
-    "cube_friction":   0.8,
-    # "joint_damping":   0.0,
-    # "gripper_friction": 1.0,
-    "sim_duration":    15.0,
-    "lights": [
-        LightParameter(
-            type="directional",
-            direction=[0.5, -0.5, -1.0],   # points down-right into scene
-            color=Rgba(1.0, 0.95, 0.85, 1.0),  # warm white
-            intensity=2.5,
-            frame="world",
-        )
-    ],
-}
 
-SIM_B = {
-    "save_dir":        f"simulation_frames/frames_sim_b_{int(time.time())}",
-    "cube_mass":       0.03,
-    "cube_friction":   0.5,
-    # "joint_damping":   0.3,
-    # "gripper_friction": 0.4,
-    "sim_duration":    15.0,
-    "lights": [
-        LightParameter(
-            type="directional",
-            direction=[0.0, 0.0, -1.0],    # straight down
-            color=Rgba(0.7, 0.8, 1.0, 1.0),  # cool blue-white
-            intensity=0.8,
-            frame="world",
-        )
-    ],
-}
+SIM_CONFIGS = [
+    {
+        "name":            "sim_baseline",
+        "save_dir":        f"simulation_frames/sim_baseline_{int(time.time())}",
+        "cube_mass":       0.01,
+        "cube_friction":   0.8,
+        "cube_position":   [0.10, 0.15, 0.02],
+        "drop_position":   [0.10, -0.15, 0.02],
+        "sim_duration":    15.0,
+        "lights": [
+            LightParameter(
+                type="directional",
+                direction=[0.5, -0.5, -1.0],
+                color=Rgba(1.0, 0.95, 0.85, 1.0),   # warm white
+                intensity=2.5,
+                frame="world",
+            )
+        ],
+    },
+    {
+        "name":            "sim_heavy_cube",
+        "save_dir":        f"simulation_frames/sim_heavy_cube_{int(time.time())}",
+        "cube_mass":       0.05,          # 5x heavier -> more grasp/slip stress
+        "cube_friction":   0.8,
+        "cube_position":   [0.10, 0.15, 0.02],
+        "drop_position":   [0.10, -0.15, 0.02],
+        "sim_duration":    15.0,
+        "lights": [
+            LightParameter(
+                type="directional",
+                direction=[0.5, -0.5, -1.0],
+                color=Rgba(1.0, 0.95, 0.85, 1.0),
+                intensity=2.5,
+                frame="world",
+            )
+        ],
+    },
+    # {
+    #     "name":            "sim_low_friction",
+    #     "save_dir":        f"simulation_frames/sim_low_friction_{int(time.time())}",
+    #     "cube_mass":       0.01,
+    #     "cube_friction":   0.2,           # slippery -> cube may shift during grasp/lift
+    #     "cube_position":   [0.10, 0.15, 0.02],
+    #     "drop_position":   [0.10, -0.15, 0.02],
+    #     "sim_duration":    15.0,
+    #     "lights": [
+    #         LightParameter(
+    #             type="directional",
+    #             direction=[0.0, 0.0, -1.0],
+    #             color=Rgba(0.7, 0.8, 1.0, 1.0),     # cool blue-white
+    #             intensity=0.8,
+    #             frame="world",
+    #         )
+    #     ],
+    # },
+    {
+        "name":            "sim_shifted_cube_light",
+        "save_dir":        f"simulation_frames/sim_shifted_cube_light_{int(time.time())}",
+        "cube_mass":       0.02,
+        "cube_friction":   0.5,
+        "cube_position":   [0.15, 0.19, 0.02],   # moved -> different IK solution/arm path
+        "drop_position":   [0.10, -0.15, 0.02],
+        "sim_duration":    15.0,
+        "lights": [
+            LightParameter(
+                type="directional",
+                direction=[-0.3, 0.4, -1.0],
+                color=Rgba(0.9, 0.9, 0.9, 1.0),
+                intensity=1.5,
+                frame="world",
+            )
+        ],
+    },
+    {
+        "name":            "sim_shifted_cube",
+        "save_dir":        f"simulation_frames/sim_shifted_cube_{int(time.time())}",
+        "cube_mass":       0.02,
+        "cube_friction":   0.5,
+        "cube_position":   [0.15, 0.19, 0.02],   # moved -> different IK solution/arm path
+        "drop_position":   [0.10, -0.15, 0.02],
+        "sim_duration":    15.0,
+        "lights": [
+            LightParameter(
+                type="directional",
+                direction=[0.5, -0.5, -1.0],
+                color=Rgba(1.0, 0.95, 0.85, 1.0),
+                intensity=2.5,
+                frame="world",
+            )
+        ],
+    },
+    # {
+    #     "name":            "sim_slippery_heavy",
+    #     "save_dir":        f"simulation_frames/sim_slippery_heavy_{int(time.time())}",
+    #     "cube_mass":       0.04,
+    #     "cube_friction":   0.15,          # heavy AND slippery -> worst-case grasp
+    #     "cube_position":   [0.10, 0.15, 0.02],
+    #     "drop_position":   [0.10, -0.15, 0.02],
+    #     "sim_duration":    15.0,
+    #     "lights": [
+    #         LightParameter(
+    #             type="directional",
+    #             direction=[0.0, 0.0, -1.0],
+    #             color=Rgba(0.6, 0.6, 0.6, 1.0),
+    #             intensity=0.5,             # dim
+    #             frame="world",
+    #         )
+    #     ],
+    # },
+ 
+    # ── Deliberately-different-outcome scenarios ──
+    # Unlike the configs above (which only tweak physics/lighting around the
+    # same successful pick-and-place), these force a genuinely different
+    # trajectory outcome so state/energy comparisons actually show a gap.
+    {
+        "name":            "sim_drop_mid_transport",
+        "save_dir":        f"simulation_frames/sim_drop_mid_transport_{int(time.time())}",
+        "cube_mass":       0.01,
+        "cube_friction":   0.8,
+        "cube_position":   [0.10, 0.15, 0.02],
+        "drop_position":   [0.10, -0.15, 0.02],
+        "sim_duration":    15.0,
+        # Grasp succeeds normally, but the gripper is forced open the moment
+        # it enters TRANSPORT -> cube falls out mid-carry instead of reaching
+        # the drop zone. EE trajectory stays similar to baseline; cube
+        # trajectory diverges hard partway through.
+        "force_open_states": ["TRANSPORT"],
+        "lights": [
+            LightParameter(
+                type="directional",
+                direction=[0.5, -0.5, -1.0],
+                color=Rgba(1.0, 0.95, 0.85, 1.0),
+                intensity=2.5,
+                frame="world",
+            )
+        ],
+    },
+    # {
+    #     "name":            "sim_grasp_miss",
+    #     "save_dir":        f"simulation_frames/sim_grasp_miss_{int(time.time())}",
+    #     "cube_mass":       0.01,
+    #     "cube_friction":   0.8,
+    #     "cube_position":   [0.10, 0.15, 0.02],
+    #     "drop_position":   [0.10, -0.15, 0.02],
+    #     "sim_duration":    15.0,
+    #     # Gripper closes 6cm off in Y from the true grasp point -> closes on
+    #     # empty air beside the cube. Cube never leaves the table; EE still
+    #     # runs the full approach/descend/lift/transport/drop motion on an
+    #     # empty gripper. This is the "attempted but failed pick" case.
+    #     "grasp_offset_error": [0.0, 0.06, 0.0],
+    #     "lights": [
+    #         LightParameter(
+    #             type="directional",
+    #             direction=[0.5, -0.5, -1.0],
+    #             color=Rgba(1.0, 0.95, 0.85, 1.0),
+    #             intensity=2.5,
+    #             frame="world",
+    #         )
+    #     ],
+    # },
+    {
+        "name":            "sim_weak_grip_light",
+        "save_dir":        f"simulation_frames/sim_weak_grip_light_{int(time.time())}",
+        "cube_mass":       0.03,
+        "cube_friction":   0.3,
+        "cube_position":   [0.10, 0.15, 0.02],
+        "drop_position":   [0.10, -0.15, 0.02],
+        "sim_duration":    15.0,
+        # Gripper "closed" position is too wide to actually grip the cube
+        # tightly. Combined with moderate mass/friction, the cube is
+        # initially lifted but slips out during LIFT/TRANSPORT rather than
+        # never being touched at all -> a different failure signature than
+        # sim_grasp_miss (which never contacts the cube).
+        "gripper_closed_override": 0.020,
+        "lights": [
+            LightParameter(
+                type="directional",
+                direction=[0.0, 0.0, -1.0],
+                color=Rgba(0.8, 0.8, 0.8, 1.0),
+                intensity=1.2,
+                frame="world",
+            )
+        ],
+    },
+    {
+        "name":            "sim_weak_grip",
+        "save_dir":        f"simulation_frames/sim_weak_grip_{int(time.time())}",
+        "cube_mass":       0.03,
+        "cube_friction":   0.3,
+        "cube_position":   [0.10, 0.15, 0.02],
+        "drop_position":   [0.10, -0.15, 0.02],
+        "sim_duration":    15.0,
+        # Gripper "closed" position is too wide to actually grip the cube
+        # tightly. Combined with moderate mass/friction, the cube is
+        # initially lifted but slips out during LIFT/TRANSPORT rather than
+        # never being touched at all -> a different failure signature than
+        # sim_grasp_miss (which never contacts the cube).
+        "gripper_closed_override": 0.020,
+        "lights": [
+            LightParameter(
+                type="directional",
+                direction=[0.5, -0.5, -1.0],
+                color=Rgba(1.0, 0.95, 0.85, 1.0),
+                intensity=2.5,
+                frame="world",
+            )
+        ],
+    },
+    {
+        "name":            "sim_fast_light",
+        "save_dir":        f"simulation_frames/sim_fast_light_{int(time.time())}",
+        "cube_mass":       0.01,
+        "cube_friction":   0.6,
+        "cube_position":   [0.10, 0.15, 0.02],
+        "drop_position":   [0.10, -0.15, 0.02],
+        "sim_duration":    15.0,
+        # 4x faster phase transitions -> abrupt, high-velocity motion.
+        # Grasp succeeds, but inertial effects during LIFT/TRANSPORT are
+        # much more pronounced than the slow baseline -> a genuinely
+        # different EE/cube trajectory shape, not just a failure/success
+        # flip.
+        "phase_duration":  0.5,
+        "lights": [
+            LightParameter(
+                type="directional",
+                direction=[0.2, 0.6, -1.0],
+                color=Rgba(1.0, 1.0, 1.0, 1.0),
+                intensity=2.0,
+                frame="world",
+            )
+        ],
+    },
+    {
+        "name":            "sim_fast",
+        "save_dir":        f"simulation_frames/sim_fast_{int(time.time())}",
+        "cube_mass":       0.01,
+        "cube_friction":   0.6,
+        "cube_position":   [0.10, 0.15, 0.02],
+        "drop_position":   [0.10, -0.15, 0.02],
+        "sim_duration":    15.0,
+        # 4x faster phase transitions -> abrupt, high-velocity motion.
+        # Grasp succeeds, but inertial effects during LIFT/TRANSPORT are
+        # much more pronounced than the slow baseline -> a genuinely
+        # different EE/cube trajectory shape, not just a failure/success
+        # flip.
+        "phase_duration":  0.5,
+        "lights": [
+            LightParameter(
+                type="directional",
+                direction=[0.5, -0.5, -1.0],
+                color=Rgba(1.0, 0.95, 0.85, 1.0),
+                intensity=2.5,
+                frame="world",
+            )
+        ],
+    },
+]
 
 def run_simulation(config: dict):
+    name = config.get("name", config.get("save_dir", "unnamed_sim"))
+    print(f"\n{'='*60}")
+    print(f"RUNNING: {name}")
+    print(f"{'='*60}")
+
     # Load the robot model.
     builder = DiagramBuilder()
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.0)
@@ -729,8 +981,8 @@ def run_simulation(config: dict):
     cube_urdf_str = load_cube_urdf(config["cube_mass"], config["cube_friction"])
     Parser(plant).AddModelsFromString(cube_urdf_str, "urdf")
 
-    cube_position = [0.1, 0.15, 0.02]
-    drop_position = [0.1, -0.15, 0.02]  # Drop zone in front of right arm
+    cube_position = config["cube_position"]  # Position in front of left arm
+    drop_position = config["drop_position"]  # Drop zone in front of right arm
 
     # Set cube position to be just above the table, in front of the left arm
     cube_body = plant.GetBodyByName("cube_link")
@@ -741,9 +993,9 @@ def run_simulation(config: dict):
 
     # inspect_camera_frames(plant)  # Print camera-related frames to find names for Phase 2
     position_names = plant.GetPositionNames()
-    print("Position names and their order in q:")
-    for i, name in enumerate(position_names):
-        print(f"  Index {i:2d}: {name}")
+    # print("Position names and their order in q:")
+    # for i, name in enumerate(position_names):
+    #     print(f"  Index {i:2d}: {name}")
 
     # Enable hydroelastic contact
     scene_graph_config = SceneGraphConfig()
@@ -751,7 +1003,7 @@ def run_simulation(config: dict):
     scene_graph.set_config(scene_graph_config)
 
 # ── Add all 4 Trossen cameras ──
-    print("\nAdding cameras:")
+    # print("\nAdding cameras:")
     cameras = add_cameras_from_urdf(
         builder, plant, scene_graph,
         renderer_name=renderer_name,
@@ -776,7 +1028,7 @@ def run_simulation(config: dict):
 
     # Get the number of actuators
     nu = len(plant.GetJointActuatorIndices())
-    print(f"Number of actuators: {nu}")
+    # print(f"Number of actuators: {nu}")
 
     # Actuator names in order
     # print(f"Joint actuators found:")
@@ -787,7 +1039,13 @@ def run_simulation(config: dict):
     # Creates instance of the controller and adds it to the diagram builder - outputs only 14 joints
     # trajectory_source = builder.AddSystem(DebugTrajectory(nu))
 
-    controller = builder.AddSystem(PickAndPlaceController(plant, nu, cube_position, drop_position))
+    controller = builder.AddSystem(PickAndPlaceController(
+        plant, nu, cube_position, drop_position,
+        phase_duration=config.get("phase_duration", 2.0),
+        grasp_offset_error=config.get("grasp_offset_error"),
+        gripper_closed_override=config.get("gripper_closed_override"),
+        force_open_states=config.get("force_open_states"),
+    ))
 
     # Converts position commands to position + velocity commands
     # Robot's input port expects [position, velocities] (28 values total for 14 joints)
@@ -872,7 +1130,6 @@ def run_simulation(config: dict):
         
         # Forward kinematics — EE and cube position at each timestep
         ee_frame  = plant.GetFrameByName("follower_left_ee_gripper_link")
-        cube_body = plant.GetBodyByName("cube_link")
         tmp_ctx   = plant.CreateDefaultContext()
         
         ee_pos_log  = np.zeros((len(log_times), 3))
@@ -898,7 +1155,20 @@ def run_simulation(config: dict):
         )
         
         with open(os.path.join(save_dir, "trajectory_meta.json"), "w") as f:
-            json.dump({"nq": nq, "nv": nv, "n_frames": len(log_times)}, f, indent=2)
+            json.dump({
+                "name": name,
+                "nq": nq,
+                "nv": nv,
+                "n_frames": len(log_times),
+                "cube_mass": config["cube_mass"],
+                "cube_friction": config["cube_friction"],
+                "cube_position": cube_position,
+                "drop_position": drop_position,
+                "phase_duration": config.get("phase_duration", 2.0),
+                "grasp_offset_error": config.get("grasp_offset_error"),
+                "gripper_closed_override": config.get("gripper_closed_override"),
+                "force_open_states": config.get("force_open_states"),
+            }, f, indent=2)
         
         print(f"  [StateLog] Saved {len(log_times)} timesteps → {save_dir}/trajectory_states.npz")
         print(f"  [StateLog] state_data shape: {state_data.shape}  (nq+nv={nq+nv}, T={len(log_times)})")
@@ -923,5 +1193,5 @@ def run_simulation(config: dict):
     #         print(f"  {frame_name:30s} -> ERROR: {e}")
 
 if __name__ == "__main__":
-    run_simulation(SIM_A)
-    run_simulation(SIM_B)
+    for cfg in SIM_CONFIGS:
+        run_simulation(cfg)
