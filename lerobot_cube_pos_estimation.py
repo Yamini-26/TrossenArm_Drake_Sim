@@ -204,7 +204,7 @@ def main():
     plt.plot(times[lo:hi], gripper_vals[lo:hi])
     plt.axvline(times[approx_idx], color='r', linestyle='--', label='video t=12s')
     plt.xlabel("time (s)"); plt.ylabel("gripper value"); plt.legend()
-    plt.savefig("gripper_trace.png")
+    plt.savefig(f"{args.data_root}/gripper_trace.png")
 
     q_at_grasp = q_drake_order[grasp_idx]
     tmp_ctx = plant.CreateDefaultContext()
