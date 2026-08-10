@@ -10,6 +10,7 @@ from pathlib import Path
 import json
 import os
 import time
+import matplotlib.cm as cm
 import numpy as np
 import pandas as pd
 import xml.etree.ElementTree as ET
@@ -43,6 +44,7 @@ from pydrake.all import (
     ImageRgba8U,
     LightParameter,
     Rgba,
+    ImageDepth32F,
 )
 from pydrake.common.yaml import yaml_load_file
 from PIL import Image
@@ -90,7 +92,7 @@ def load_episode(data_root, episode_index, source_col="observation.state",
     if not parquet_path.exists():
         raise FileNotFoundError(f"No such episode file: {parquet_path}")
 
-    df = pd.read_parquet(parquet_path)
+    df = pd.read_parquet(parquet_path, columns=["timestamp", source_col])
     times = df["timestamp"].to_numpy().astype(float)
     times = times - times[0]
 
@@ -180,35 +182,70 @@ class ReplayController(LeafSystem):
 # Cameras
 
 class ImageSaver(LeafSystem):
-    """Save frames from one RgbdSensor color port to disk."""
+    """Save color + depth frames from one RgbdSensor to disk, same frame index for both."""
 
     def __init__(self, camera_name, save_dir,
-                 save_interval=0.5, width=CAM_WIDTH, height=CAM_HEIGHT):
+                 save_interval=0.5, width=CAM_WIDTH, height=CAM_HEIGHT,
+                 save_depth_vis=True):
         LeafSystem.__init__(self)
         self._camera_name = camera_name
         self._save_dir = os.path.join(save_dir, camera_name)
+        self._depth_dir = os.path.join(self._save_dir, "depth")
+        self._depth_vis_dir = os.path.join(self._save_dir, "depth_vis")
         self._frame_count = 0
         self._width = width
         self._height = height
+        self._save_depth_vis = save_depth_vis
         os.makedirs(self._save_dir, exist_ok=True)
+        os.makedirs(self._depth_dir, exist_ok=True)
+        if save_depth_vis:
+            os.makedirs(self._depth_vis_dir, exist_ok=True)
 
-        self._image_port = self.DeclareAbstractInputPort(
-            "color_image",
-            AbstractValue.Make(ImageRgba8U(width, height))
+        self._color_port = self.DeclareAbstractInputPort(
+            "color_image", AbstractValue.Make(ImageRgba8U(width, height))
         )
-        self.DeclarePeriodicPublishEvent(save_interval, 0.0, self._save_image)
-        print(f"  [{camera_name}] -> '{self._save_dir}/' every {save_interval}s")
+        self._depth_port = self.DeclareAbstractInputPort(
+            "depth_image", AbstractValue.Make(ImageDepth32F(width, height))
+        )
+        self.DeclarePeriodicPublishEvent(save_interval, 0.0, self._save_frame)
+        print(f"  [{camera_name}] -> '{self._save_dir}/' (color+depth) every {save_interval}s")
 
-    def _save_image(self, context):
+    def _save_frame(self, context):
         try:
-            image = self._image_port.Eval(context)
+            color = self._color_port.Eval(context)
+            depth = self._depth_port.Eval(context)
         except Exception as e:
             print(f"  [{self._camera_name}] WARNING: {e}")
             return
-        img_array = np.frombuffer(image.data, dtype=np.uint8)
-        img_array = img_array.reshape((self._height, self._width, 4))
-        filename = os.path.join(self._save_dir, f"frame_{self._frame_count:05d}.png")
-        Image.fromarray(img_array[:, :, :3], mode="RGB").save(filename)
+
+        idx = self._frame_count
+
+        # color
+        color_arr = np.frombuffer(color.data, dtype=np.uint8).reshape(
+            (self._height, self._width, 4)
+        )
+        Image.fromarray(color_arr[:, :, :3], mode="RGB").save(
+            os.path.join(self._save_dir, f"frame_{idx:05d}.png")
+        )
+
+        # depth: raw metric meters, saved as .npy
+        depth_arr = np.asarray(depth.data).reshape((self._height, self._width)).astype(np.float32)
+        # Drake gives inf for "no return" (e.g. past clipping range) -- keep as-is,
+        # or clean up here if you'd rather have a sentinel like 0 or nan.
+        np.save(os.path.join(self._depth_dir, f"frame_{idx:05d}.npy"), depth_arr)
+
+        # colorized depth PNG, just for quick visual sanity checks
+        if self._save_depth_vis:
+            finite = np.isfinite(depth_arr)
+            vis = np.zeros_like(depth_arr)
+            if finite.any():
+                d_min, d_max = depth_arr[finite].min(), depth_arr[finite].max()
+                vis[finite] = (depth_arr[finite] - d_min) / max(d_max - d_min, 1e-6)
+            colored = (cm.get_cmap("turbo")(vis)[:, :, :3] * 255).astype(np.uint8)
+            Image.fromarray(colored, mode="RGB").save(
+                os.path.join(self._depth_vis_dir, f"frame_{idx:05d}.png")
+            )
+
         self._frame_count += 1
         t = context.get_time()
         if self._frame_count % 10 == 0:
@@ -258,6 +295,7 @@ def add_cameras_from_urdf(builder, plant, scene_graph, renderer_name,
 
         saver = builder.AddSystem(ImageSaver(cam_name, save_dir, save_interval))
         builder.Connect(sensor.color_image_output_port(), saver.get_input_port(0))
+        builder.Connect(sensor.depth_image_32F_output_port(), saver.get_input_port(1))
 
         sensors[cam_name] = sensor
 
