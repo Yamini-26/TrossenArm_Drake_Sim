@@ -15,8 +15,24 @@ Three analysis modes, each independently selectable via --analysis:
            K worst-matching (lowest similarity) patches per pair, so you
            can see *where* real and sim diverge most
 
+Background / motion masking
+
+    patches that barely change over the whole trajectory  -> background,
+    patches that change a lot (arm, cube, gripper)        -> foreground
+
+Use that mask to down-weight background patches (mean-similarity
+metrics) or exclude them entirely (worst-patch search) when comparing real
+vs sim frames. See --save_motion_mask / --motion_mask_dir below.
+
+Multi-camera combination
+
+Run the normal --input_dir pipeline once per camera (each produces its own
+summary.json), then combine the per-camera real-vs-sim scores into one
+number per action pair with --combine_cameras / --camera_weights. See
+combine_camera_scores() below.
+
 Usage
------
+
 Compare a folder of real_*/sim_* frames with DINOv2, all analyses:
     python dino_feature_extractor.py --input_dir simulation_frames/test_frames_real/cam_right_wrist --output dino_features/test_frames_real/cam_right_wrist/ --model_version v2
 
@@ -29,6 +45,15 @@ Patch + worst-patch only, keep the top 20 worst patches per pair:
 Legacy run/camera-directory mode (single run, no real/sim comparison, just
 per-camera self-similarity heatmaps e.g. PCA/norm/cluster over patches):
     python dino_feature_extractor.py --run_dir simulation_frames/replay_1785878156/ --output dino_features/replay_1785878156_v3/ --model_version v3 --save_features --generate_self_heatmaps --heatmap_mode pca
+
+Compute a motion mask for cam_high from the full real trajectory sequence:
+    python dino_feature_extractor.py --run_dir data/pick_place_depth_3/frames/ --output dino_features/pick_place_depth_3/real/ --model_version v3 --cameras cam_high cam_low cam_right_wrist --save_motion_mask
+
+Use that mask when comparing real vs sim on cam_high:
+    python dino_feature_extractor.py --input_dir simulation_frames/test_frames_real/cam_high/ --output dino_features/test_frames_real/cam_high/ --model_version v3 --motion_mask_dir dino_features/masks/ --motion_mask_camera cam_high
+
+Combine cam_high + cam_right_wrist real-vs-sim "patch" scores (weighted 30/70):
+    python dino_feature_extractor.py --output dino_features/combined/ --model_version v3 --combine_cameras cam_high=dino_features/test_frames_real/cam_high cam_right_wrist=dino_features/test_frames_real/cam_right_wrist --camera_weights cam_high=0.3 cam_right_wrist=0.7 --combine_analysis patch
 """
 
 import argparse
@@ -232,18 +257,75 @@ def patch_heatmap(patch_a: np.ndarray, patch_b: np.ndarray, grid: int) -> np.nda
     return sim.reshape(grid, grid)
  
  
-def mean_patch_sim(heatmap: np.ndarray) -> float:
-    """Whole-image similarity from raw patches (alternative to the CLS metric)."""
-    return float(heatmap.mean())
+def foreground_patch_indices(mask: np.ndarray, mask_mode: str = "hard",
+                              mask_threshold: float = 0.3,
+                              mask_top_frac: Optional[float] = None) -> np.ndarray:
+    """
+    Return the flat indices of patches to treat as 'foreground' under a
+    motion mask (see compute_motion_mask). Two ways to pick them:
+      - mask_top_frac given (e.g. 0.15): take the top 15% of patches by
+        mask weight, regardless of their absolute value. This is the
+        robust default -- it doesn't care what scale the mask values are
+        on for a given camera, it just keeps "the most dynamic N%".
+      - mask_top_frac=None: absolute cutoff, keep patches with
+        weight >= mask_threshold.
+    Only meaningful when mask_mode == 'hard' (see mean_patch_sim / worst_patches).
+    """
+    flat = mask.flatten()
+    if mask_top_frac is not None:
+        k = max(1, int(round(mask_top_frac * flat.size)))
+        idx = np.argsort(flat)[-k:]
+        return np.sort(idx)
+    idx = np.where(flat >= mask_threshold)[0]
+    if idx.size == 0:
+        print("  [WARN] motion mask excluded every patch at this threshold, "
+              "falling back to all patches")
+        idx = np.arange(flat.size)
+    return idx
  
  
-def worst_patches(heatmap: np.ndarray, top_k: int) -> List[Tuple[int, int, float]]:
-    """Locations (row, col) of the K lowest-similarity patches, ascending."""
+def mean_patch_sim(heatmap: np.ndarray, mask: Optional[np.ndarray] = None,
+                    mask_mode: str = "hard", mask_threshold: float = 0.3,
+                    mask_top_frac: Optional[float] = None) -> float:
+    """Whole-image similarity from raw patches (alternative to the CLS metric).
+    If `mask` is given (same (grid, grid) shape, weights in [0, 1] — see
+    compute_motion_mask):
+      - mask_mode='hard' (default, what you want for "only look at the arm/
+        cube"): plain mean over ONLY the foreground patches selected by
+        foreground_patch_indices -- background contributes exactly zero.
+      - mask_mode='soft': weighted average over ALL patches (background
+        still contributes, just less). Kept for reference/comparison, but
+        with background outnumbering foreground patches ~50:1 in a typical
+        frame, soft weighting barely moves the score -- use 'hard'.
+    """
+    if mask is None:
+        return float(heatmap.mean())
     flat = heatmap.flatten()
-    k = min(top_k, flat.size)
-    idx = np.argsort(flat)[:k]
+    if mask_mode == "soft":
+        w = mask.flatten()
+        if w.sum() < 1e-6:
+            return float(flat.mean())
+        return float((flat * w).sum() / w.sum())
+    idx = foreground_patch_indices(mask, mask_mode, mask_threshold, mask_top_frac)
+    return float(flat[idx].mean())
+ 
+ 
+def worst_patches(heatmap: np.ndarray, top_k: int, mask: Optional[np.ndarray] = None,
+                   mask_threshold: float = 0.3,
+                   mask_top_frac: Optional[float] = None) -> List[Tuple[int, int, float]]:
+    """Locations (row, col) of the K lowest-similarity patches, ascending.
+    If `mask` is given, only foreground patches (per foreground_patch_indices)
+    are considered at all, so real-vs-sim background/domain-gap noise can't
+    dominate the 'worst match' ranking."""
+    flat = heatmap.flatten()
+    if mask is not None:
+        candidate_idx = foreground_patch_indices(mask, "hard", mask_threshold, mask_top_frac)
+    else:
+        candidate_idx = np.arange(flat.size)
+    k = min(top_k, candidate_idx.size)
+    order = candidate_idx[np.argsort(flat[candidate_idx])[:k]]
     w = heatmap.shape[1]
-    return [(int(i // w), int(i % w), float(flat[i])) for i in idx]
+    return [(int(i // w), int(i % w), float(flat[i])) for i in order]
  
  
 def full_cls_matrix(feats: Dict) -> np.ndarray:
@@ -252,7 +334,9 @@ def full_cls_matrix(feats: Dict) -> np.ndarray:
     return norm @ norm.T
  
  
-def full_patch_matrix(feats: Dict, cfg: ModelConfig) -> np.ndarray:
+def full_patch_matrix(feats: Dict, cfg: ModelConfig, mask: Optional[np.ndarray] = None,
+                       mask_mode: str = "hard", mask_threshold: float = 0.3,
+                       mask_top_frac: Optional[float] = None) -> np.ndarray:
     """NxN matrix of mean raw-patch cosine similarity between every pair of
     images (the patch-mode analogue of full_cls_matrix)."""
     patches = feats["patch"]
@@ -261,12 +345,14 @@ def full_patch_matrix(feats: Dict, cfg: ModelConfig) -> np.ndarray:
     for i in range(n):
         for j in range(i + 1, n):
             heat = patch_heatmap(patches[i], patches[j], cfg.grid_size)
-            m = mean_patch_sim(heat)
+            m = mean_patch_sim(heat, mask, mask_mode, mask_threshold, mask_top_frac)
             matrix[i, j] = matrix[j, i] = m
     return matrix
  
  
-def full_worst_matrix(feats: Dict, cfg: ModelConfig, top_k: int) -> np.ndarray:
+def full_worst_matrix(feats: Dict, cfg: ModelConfig, top_k: int,
+                       mask: Optional[np.ndarray] = None, mask_threshold: float = 0.3,
+                       mask_top_frac: Optional[float] = None) -> np.ndarray:
     """NxN matrix of worst-K-patch mean similarity between every pair of
     images (the worst-patch-mode analogue of full_cls_matrix)."""
     patches = feats["patch"]
@@ -275,9 +361,160 @@ def full_worst_matrix(feats: Dict, cfg: ModelConfig, top_k: int) -> np.ndarray:
     for i in range(n):
         for j in range(i + 1, n):
             heat = patch_heatmap(patches[i], patches[j], cfg.grid_size)
-            wm = float(np.mean([w[2] for w in worst_patches(heat, top_k)]))
+            wm = float(np.mean([w[2] for w in worst_patches(heat, top_k, mask, mask_threshold, mask_top_frac)]))
             matrix[i, j] = matrix[j, i] = wm
     return matrix
+ 
+ 
+#  Idea 2: background / motion mask
+ 
+def compute_motion_mask(patch_seq: np.ndarray, grid: int) -> np.ndarray:
+    """
+    Given patch features for an ORDERED sequence of frames from one camera
+    across one trajectory run (patch_seq: (T, n_patches, dim), e.g. straight
+    from extract_features() in --run_dir mode), return a (grid, grid) weight
+    map in [0, 1] per patch position:
+      high weight -> that patch's feature changed a lot over the run
+                     (moving arm, gripper, cube -> foreground)
+      low weight  -> that patch barely changed
+                     (static table/background)
+    Use this to down-weight or exclude background patches when comparing
+    real vs sim frames elsewhere in the script.
+    """
+    norm = patch_seq / (np.linalg.norm(patch_seq, axis=-1, keepdims=True) + 1e-8)
+    mean_feat = norm.mean(axis=0, keepdims=True)
+    mean_feat = mean_feat / (np.linalg.norm(mean_feat, axis=-1, keepdims=True) + 1e-8)
+    cos_to_mean = (norm * mean_feat).sum(axis=-1)          # (T, n_patches)
+    variability = np.clip(1.0 - cos_to_mean.mean(axis=0), 0, None)  # (n_patches,)
+    vmin, vmax = variability.min(), variability.max()
+    weight = (variability - vmin) / (vmax - vmin + 1e-8)
+    return weight.reshape(grid, grid)
+ 
+ 
+def plot_motion_mask(image_path: Path, mask: np.ndarray, cfg: ModelConfig, output_path: Path):
+    img = Image.open(image_path).convert("RGB").resize((cfg.input_size, cfg.input_size))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+    ax1.imshow(img); ax1.set_title("reference frame"); ax1.axis("off")
+    ax2.imshow(img)
+    ax2.imshow(mask, cmap="hot", alpha=0.6, interpolation="nearest")
+    ax2.set_title("motion mask (bright = foreground/dynamic)")
+    ax2.axis("off")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved -> {output_path}")
+ 
+ 
+def load_motion_mask(mask_dir: Path, cam: str) -> Optional[np.ndarray]:
+    p = mask_dir / f"{cam}_motion_mask.npy"
+    if not p.is_file():
+        print(f"  [WARN] no motion mask found at {p}, proceeding unmasked")
+        return None
+    print(f"  Loaded motion mask <- {p}")
+    return np.load(p)
+ 
+ 
+def compute_action_diff_mask(patch_a: np.ndarray, patch_b: np.ndarray, grid: int) -> np.ndarray:
+    """
+    Given raw patch features for two frames that are identical except for
+    ONE task-relevant difference (e.g. sim_grab_neutral vs sim_drop_neutral --
+    same trajectory replay, same arm/cable pose, same lighting, only cube
+    presence/position differs), return a (grid, grid) weight map in [0, 1]:
+    high = that patch's content changed a lot between the two frames
+    (cube/gripper-relevant), low = unchanged (background, cables, lighting --
+    anything NOT explained by the cube).
+
+    This localizes task-relevant patches far more precisely than temporal
+    motion alone: arm/cable motion is IDENTICAL in both frames (same
+    replayed trajectory) so it cancels out; only the cube's presence
+    actually differs.
+    """
+    heat = patch_heatmap(patch_a, patch_b, grid)   # cosine similarity per patch
+    diff = np.clip(1.0 - heat, 0, None)
+    dmin, dmax = diff.min(), diff.max()
+    return (diff - dmin) / (dmax - dmin + 1e-8)
+ 
+ 
+def build_action_diff_mask(feats: Dict, file_to_idx: Dict, meta: Dict[str, dict], cfg: ModelConfig,
+                            positive_action: str, negative_action: str,
+                            source: str = "sim") -> Tuple[Optional[np.ndarray], Optional[str]]:
+    """
+    Auto-pair every {source}_<positive_action>_<variant> image with the
+    {source}_<negative_action>_<variant> image sharing the same variant tag
+    (e.g. sim_grab_neutral <-> sim_drop_neutral, sim_grab_warm <-> sim_drop_warm),
+    average their per-pair diff masks (compute_action_diff_mask). Averaging
+    over lighting variants cancels out lighting-only differences and keeps
+    only what's consistently explained by the cube.
+    Returns (mask, one_of_the_paired_filenames_for_visualization) or (None, None)
+    if no matching pairs were found.
+    """
+    by_variant: Dict[str, Dict[str, str]] = {}
+    for name, m in meta.items():
+        if m["source"] != source or m["action"] not in (positive_action, negative_action):
+            continue
+        by_variant.setdefault(m["variant"], {})[m["action"]] = name
+ 
+    masks, ref_name = [], None
+    for variant, d in by_variant.items():
+        if positive_action in d and negative_action in d:
+            pa = feats["patch"][file_to_idx[d[positive_action]]]
+            pb = feats["patch"][file_to_idx[d[negative_action]]]
+            masks.append(compute_action_diff_mask(pa, pb, cfg.grid_size))
+            ref_name = ref_name or d[positive_action]
+            print(f"  paired {d[positive_action]} vs {d[negative_action]} (variant={variant})")
+    if not masks:
+        print(f"  [WARN] no {source}_{positive_action}_* / {source}_{negative_action}_* pairs "
+              f"found for action-diff mask")
+        return None, None
+    return np.mean(masks, axis=0), ref_name
+ 
+ 
+#  Idea 1: combine per-camera real-vs-sim scores into one metric
+ 
+def combine_camera_scores(camera_summaries: Dict[str, dict], analysis: str,
+                           weights: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+    """
+    camera_summaries: {camera_name: loaded summary.json dict}, one entry per
+    camera, each produced by a normal --input_dir run of this script on that
+    camera's real_*/sim_* folder.
+    analysis: 'cls', 'patch', or 'worst' -- which section's real-vs-sim
+    scores to combine.
+    weights: per-camera weight (default: uniform). For a given pair key,
+    weights are renormalized over only the cameras that actually have that
+    key, so a missing pair on one camera doesn't zero out the combination.
+
+    NOTE: this assumes the same real_<action>[_variant] / sim_<action>[_variant]
+    naming is used across every camera's folder, so pair keys line up
+    ("real_grab__vs__sim_grab_neutral" means the same thing for cam_high and
+    cam_right_wrist). If your per-camera filenames diverge, rename them to
+    match before running this.
+    """
+    cams = list(camera_summaries.keys())
+    if weights is None:
+        weights = {c: 1.0 for c in cams}
+ 
+    score_key = {"cls": "cls_cosine_sim", "patch": "mean_patch_cosine_sim",
+                 "worst": "worst_patch_mean_sim"}[analysis]
+    section = "pairs" if analysis == "worst" else "real_vs_sim"
+ 
+    all_keys = set()
+    for cam in cams:
+        all_keys |= set(camera_summaries[cam][analysis][section].keys())
+ 
+    combined = {}
+    for key in sorted(all_keys):
+        num, den = 0.0, 0.0
+        for cam in cams:
+            entry = camera_summaries[cam][analysis][section].get(key)
+            if entry is None:
+                continue
+            num += weights.get(cam, 1.0) * entry[score_key]
+            den += weights.get(cam, 1.0)
+        if den > 0:
+            combined[key] = num / den
+        else:
+            print(f"  [WARN] no camera had pair '{key}', skipping")
+    return combined
  
  
 #  Plotting
@@ -406,15 +643,21 @@ def run_cls_analysis(feats: Dict, file_to_idx: Dict, within_pairs, anchor_pairs,
  
  
 def run_patch_analysis(feats: Dict, file_to_idx: Dict, within_pairs, anchor_pairs,
-                        cfg: ModelConfig, output_dir: Path) -> Dict:
+                        cfg: ModelConfig, output_dir: Path,
+                        mask: Optional[np.ndarray] = None, mask_mode: str = "hard",
+                        mask_threshold: float = 0.3, mask_top_frac: Optional[float] = None) -> Dict:
     print("\n=== Raw-patch analysis (no CLS token) ===")
+    if mask is not None:
+        n_fg = foreground_patch_indices(mask, mask_mode, mask_threshold, mask_top_frac).size
+        print(f"  (mask_mode={mask_mode}, using {n_fg}/{mask.size} patches "
+              f"({100 * n_fg / mask.size:.1f}%) as 'foreground')")
     patch_dir = output_dir / "patch_heatmaps"
     patch_dir.mkdir(exist_ok=True)
  
     def compare(a_name, b_name):
         pa, pb = feats["patch"][file_to_idx[a_name]], feats["patch"][file_to_idx[b_name]]
         heat = patch_heatmap(pa, pb, cfg.grid_size)
-        return heat, mean_patch_sim(heat)
+        return heat, mean_patch_sim(heat, mask, mask_mode, mask_threshold, mask_top_frac)
  
     within_results = {}
     for a, b in within_pairs:
@@ -445,7 +688,7 @@ def run_patch_analysis(feats: Dict, file_to_idx: Dict, within_pairs, anchor_pair
                   output_dir / "patch_real_vs_sim_bar.png")
  
     print("  Computing full NxN mean-patch similarity matrix ...")
-    matrix = full_patch_matrix(feats, cfg)
+    matrix = full_patch_matrix(feats, cfg, mask, mask_mode, mask_threshold, mask_top_frac)
     labels = [Path(n).stem for n in feats["files"]]
     plot_similarity_matrix(matrix, labels, output_dir / "patch_similarity_matrix.png",
                             title="Mean patch cosine similarity (all images)")
@@ -455,15 +698,21 @@ def run_patch_analysis(feats: Dict, file_to_idx: Dict, within_pairs, anchor_pair
  
  
 def run_worst_patch_analysis(feats: Dict, file_to_idx: Dict, within_pairs, anchor_pairs,
-                              cfg: ModelConfig, top_k: int, output_dir: Path) -> Dict:
+                              cfg: ModelConfig, top_k: int, output_dir: Path,
+                              mask: Optional[np.ndarray] = None, mask_threshold: float = 0.3,
+                              mask_top_frac: Optional[float] = None) -> Dict:
     print(f"\n=== Worst-patch analysis (bottom {top_k} patches per pair) ===")
+    if mask is not None:
+        n_fg = foreground_patch_indices(mask, "hard", mask_threshold, mask_top_frac).size
+        print(f"  (restricting worst-patch search to {n_fg}/{mask.size} foreground patches)")
+ 
     worst_dir = output_dir / "worst_patch_heatmaps"
     worst_dir.mkdir(exist_ok=True)
  
     def compare(a_name, b_name):
         pa, pb = feats["patch"][file_to_idx[a_name]], feats["patch"][file_to_idx[b_name]]
         heat = patch_heatmap(pa, pb, cfg.grid_size)
-        worst = worst_patches(heat, top_k)
+        worst = worst_patches(heat, top_k, mask, mask_threshold, mask_top_frac)
         worst_mean = float(np.mean([w[2] for w in worst]))
         return heat, worst, worst_mean
  
@@ -495,7 +744,7 @@ def run_worst_patch_analysis(feats: Dict, file_to_idx: Dict, within_pairs, ancho
             print(f"    {k}: {results[k]['worst_patch_mean_sim']:.4f}")
  
     print("  Computing full NxN worst-patch similarity matrix ...")
-    matrix = full_worst_matrix(feats, cfg, top_k)
+    matrix = full_worst_matrix(feats, cfg, top_k, mask, mask_threshold, mask_top_frac)
     labels = [Path(n).stem for n in feats["files"]]
     plot_similarity_matrix(matrix, labels, output_dir / "worst_patch_similarity_matrix.png",
                             title=f"Worst-{top_k}-patch mean similarity (all images)")
@@ -504,7 +753,9 @@ def run_worst_patch_analysis(feats: Dict, file_to_idx: Dict, within_pairs, ancho
  
  
 #  Legacy single-run / camera-directory mode
-#  (no real/sim comparison -- just self-similarity heatmaps per cam)
+#  (no real/sim comparison -- just self-similarity heatmaps per cam, plus
+#  now also where the --save_motion_mask flag lives, since it needs an
+#  ordered per-camera frame sequence)
  
 def resolve_camera_files(run_dir: Path, cam: str, frame_indices: Optional[List[int]]) -> List[Path]:
     cam_dir = run_dir / cam
@@ -583,9 +834,26 @@ def run_legacy_run_dir_mode(model, cfg: ModelConfig, transform, device: str, arg
                 visualize_self_heatmap(files[i], feats["patch"][i], cfg, out_path, args.heatmap_mode)
                 print(f"  Generated {args.heatmap_mode} heatmap for frame {i}")
  
+        if args.save_motion_mask:
+            if len(files) < 2:
+                print(f"  [WARN] {cam}: need >= 2 ordered frames to compute a motion mask, skipping")
+            else:
+                mask = compute_motion_mask(feats["patch"], cfg.grid_size)
+                np.save(output_dir / f"{cam}_motion_mask.npy", mask)
+                plot_motion_mask(files[len(files) // 2], mask, cfg,
+                                  output_dir / f"{cam}_motion_mask.png")
+                print(f"  Saved motion mask -> {output_dir / f'{cam}_motion_mask.npy'} "
+                      f"(mean weight={mask.mean():.3f})")
+ 
  
 #  Main
 files_lookup: Dict[str, Path] = {}  # filename -> Path, populated in main()
+ 
+ 
+def _parse_kv_list(items: Optional[List[str]]) -> Optional[Dict[str, str]]:
+    if not items:
+        return None
+    return dict(kv.split("=", 1) for kv in items)
  
  
 def main():
@@ -594,7 +862,7 @@ def main():
                          help="Folder of real_*/sim_* images to compare (generalized pairs mode)")
     parser.add_argument("--run_dir", default=None,
                          help="Legacy: path to a single run's cam_*/ frame directories "
-                              "(no real/sim comparison, just self-similarity heatmaps)")
+                              "(no real/sim comparison, just self-similarity heatmaps / motion mask)")
     parser.add_argument("--model_version", choices=["v2", "v3"], required=True,
                          help="Which DINO version to use")
     parser.add_argument("--analysis", nargs="+", choices=["cls", "patch", "worst", "all"],
@@ -615,16 +883,93 @@ def main():
     parser.add_argument("--heatmap_mode", default="pca", choices=["pca", "norm", "cluster"])
     parser.add_argument("--sample_interval", type=int, default=1)
  
-    args = parser.parse_args()
+    # motion / background mask (Idea 2)
+    parser.add_argument("--save_motion_mask", action="store_true",
+                         help="[run_dir mode] compute + save a per-camera motion mask from the "
+                              "ordered frame sequence (background patches get low weight)")
+    parser.add_argument("--motion_mask_dir", default=None,
+                         help="[input_dir mode] directory containing precomputed "
+                              "<camera>_motion_mask.npy (from --save_motion_mask) to apply")
+    parser.add_argument("--motion_mask_camera", default=None,
+                         help="[input_dir mode] which camera's mask to load from --motion_mask_dir")
+    parser.add_argument("--mask_mode", choices=["hard", "soft"], default="hard",
+                         help="[input_dir mode] 'hard' (default): score is a plain mean over ONLY "
+                              "foreground patches, background contributes zero -- use this to focus "
+                              "purely on the arm/cube. 'soft': weighted average over all patches "
+                              "(background still contributes a little; mostly for comparison).")
+    parser.add_argument("--mask_threshold", type=float, default=0.3,
+                         help="[input_dir mode] absolute cutoff: patches with mask weight below this "
+                              "are treated as background. Ignored if --mask_top_frac is set.")
+    parser.add_argument("--mask_top_frac", type=float, default=None,
+                         help="[input_dir mode] instead of an absolute cutoff, keep only the top "
+                              "this-fraction of patches by mask weight as foreground, e.g. 0.15 "
+                              "keeps the most-dynamic 15%% of patches. Recommended -- robust to "
+                              "different mask value ranges across cameras.")
+    parser.add_argument("--diff_mask_actions", nargs=2, default=None, metavar=("POSITIVE", "NEGATIVE"),
+                         help="[input_dir mode] auto-build a mask from within this run's own images "
+                              "by diffing every <source>_<POSITIVE>_<variant> vs "
+                              "<source>_<NEGATIVE>_<variant> pair (e.g. --diff_mask_actions grab drop). "
+                              "Isolates patches that differ specifically because of the task-relevant "
+                              "change (e.g. cube presence), not general motion like cables/lighting. "
+                              "If --motion_mask_dir is ALSO given, the two masks are multiplied together.")
+    parser.add_argument("--diff_mask_source", choices=["real", "sim"], default="sim",
+                         help="[input_dir mode] which source's images to pair up for --diff_mask_actions "
+                              "(sim is usually best: you control lighting/pose exactly, so the diff "
+                              "isolates the cube cleanly)")
  
-    if not args.input_dir and not args.run_dir:
-        parser.error("must specify either --input_dir (real_/sim_ pairs) or --run_dir (legacy)")
+    # multi-camera combination (Idea 1)
+    parser.add_argument("--combine_cameras", nargs="+", default=None,
+                         help="camera=output_dir pairs, e.g. cam_high=dino_features/cam_high "
+                              "cam_right_wrist=dino_features/cam_right_wrist. Each output_dir must "
+                              "already contain a summary.json from a prior --input_dir run.")
+    parser.add_argument("--camera_weights", nargs="+", default=None,
+                         help="camera=weight pairs, e.g. cam_high=0.3 cam_right_wrist=0.7 "
+                              "(default: uniform)")
+    parser.add_argument("--combine_analysis", choices=["cls", "patch", "worst"], default="patch",
+                         help="which per-camera analysis section to combine")
+ 
+    args = parser.parse_args()
  
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Device : {args.device}")
     print(f"Output : {output_dir}\n")
  
+    # --- combine-cameras mode doesn't need the model at all ---
+    if args.combine_cameras:
+        camera_dirs = _parse_kv_list(args.combine_cameras)
+        weights_raw = _parse_kv_list(args.camera_weights)
+        weights = {k: float(v) for k, v in weights_raw.items()} if weights_raw else None
+ 
+        camera_summaries = {}
+        for cam, d in camera_dirs.items():
+            summary_path = Path(d) / "summary.json"
+            with open(summary_path) as f:
+                camera_summaries[cam] = json.load(f)
+            print(f"  Loaded {summary_path}")
+ 
+        combined = combine_camera_scores(camera_summaries, args.combine_analysis, weights)
+        print(f"\n=== Combined ({'+'.join(camera_dirs)}) {args.combine_analysis} real-vs-sim scores ===")
+        for k, v in combined.items():
+            print(f"  {k}: {v:.4f}")
+ 
+        keys = list(combined.keys())
+        if keys:
+            plot_bar(keys, [combined[k] for k in keys],
+                      f"Combined ({'+'.join(camera_dirs)}) real vs sim ({args.combine_analysis})",
+                      "combined similarity", output_dir / "combined_real_vs_sim_bar.png")
+        with open(output_dir / "combined_summary.json", "w") as f:
+            json.dump({"cameras": list(camera_dirs.keys()),
+                       "weights": weights or "uniform",
+                       "analysis": args.combine_analysis,
+                       "scores": combined}, f, indent=2)
+        print(f"\nSaved combined summary -> {output_dir / 'combined_summary.json'}")
+        return
+ 
+    if not args.input_dir and not args.run_dir:
+        parser.error("must specify --input_dir (real_/sim_ pairs), --run_dir (legacy / motion mask), "
+                      "or --combine_cameras")
+ 
+    print(f"Device : {args.device}")
     model, cfg = load_model(args.model_version, args.device)
     transform = make_transform(cfg)
  
@@ -641,6 +986,27 @@ def main():
             np.save(output_dir / "cls_features.npy", feats["cls"])
             np.save(output_dir / "patch_features.npy", feats["patch"])
  
+        mask = None
+        if args.motion_mask_dir:
+            cam = args.motion_mask_camera or input_dir.name
+            mask = load_motion_mask(Path(args.motion_mask_dir), cam)
+ 
+        if args.diff_mask_actions:
+            pos, neg = args.diff_mask_actions
+            diff_mask, ref_name = build_action_diff_mask(feats, file_to_idx, meta, cfg,
+                                                           pos, neg, args.diff_mask_source)
+            if diff_mask is not None:
+                np.save(output_dir / "action_diff_mask.npy", diff_mask)
+                if ref_name:
+                    plot_motion_mask(files_lookup[ref_name], diff_mask, cfg,
+                                      output_dir / "action_diff_mask.png")
+                if mask is not None:
+                    combined = mask * diff_mask
+                    mask = combined / combined.max() if combined.max() > 0 else diff_mask
+                    print("  Combined motion mask x action-diff mask -> final mask")
+                else:
+                    mask = diff_mask
+ 
         within_pairs, anchor_pairs, groups = build_pairs(meta)
  
         modes = set(args.analysis)
@@ -653,10 +1019,14 @@ def main():
                                                groups, output_dir)
         if "patch" in modes:
             summary["patch"] = run_patch_analysis(feats, file_to_idx, within_pairs, anchor_pairs,
-                                                    cfg, output_dir)
+                                                    cfg, output_dir, mask=mask, mask_mode=args.mask_mode,
+                                                    mask_threshold=args.mask_threshold,
+                                                    mask_top_frac=args.mask_top_frac)
         if "worst" in modes:
             summary["worst"] = run_worst_patch_analysis(feats, file_to_idx, within_pairs, anchor_pairs,
-                                                          cfg, args.top_k_worst, output_dir)
+                                                          cfg, args.top_k_worst, output_dir,
+                                                          mask=mask, mask_threshold=args.mask_threshold,
+                                                          mask_top_frac=args.mask_top_frac)
  
         with open(output_dir / "summary.json", "w") as f:
             json.dump(summary, f, indent=2)
@@ -669,4 +1039,3 @@ def main():
  
 if __name__ == "__main__":
     main()
-    
