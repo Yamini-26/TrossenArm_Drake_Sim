@@ -7,6 +7,7 @@
 
 from pathlib import Path
 
+import argparse
 import json
 import os
 import time
@@ -71,6 +72,32 @@ LEROBOT_JOINT_ORDER = [
     "right_joint_0", "right_joint_1", "right_joint_2", "right_joint_3",
     "right_joint_4", "right_joint_5", "right_joint_6",
 ]
+
+LIGHT_VARIATIONS = {
+    "warm": [
+        LightParameter(
+            type="directional",
+            direction=[0.5, -0.5, -1.0],
+            color=Rgba(1.0, 0.95, 0.85, 1.0),
+            intensity=2.5,
+            frame="world",
+        )
+    ],
+    "neutral": [
+        LightParameter(
+            type="directional",
+            direction=[0.0, 0.0, -1.0],
+            color=Rgba(0.8, 0.8, 0.8, 1.0),
+            intensity=1.2,
+            frame="world",
+        )
+    ],
+}
+
+CUBE_POSITIONS = {
+    "pick_place": [-0.0900, -0.1710, 0.0180],
+    "pick_place_center": [-0.3538, 0.0036, 0.0180],
+}
 
 
 # LeRobot episode loading + joint-order mapping
@@ -252,8 +279,7 @@ class ImageSaver(LeafSystem):
             print(f"  [{self._camera_name}] frame {self._frame_count} t={t:.2f}s")
 
 
-def add_cameras_from_urdf(builder, plant, scene_graph, renderer_name,
-                           save_dir="simulation_frames", save_interval=0.5):
+def add_cameras_from_urdf(builder, plant, scene_graph, renderer_name, save_interval, save_dir="simulation_frames"):
     """Attach one RgbdSensor per camera using the exact body frame from the URDF."""
     cam_info = CameraInfo(
         width=CAM_WIDTH, height=CAM_HEIGHT,
@@ -272,6 +298,7 @@ def add_cameras_from_urdf(builder, plant, scene_graph, renderer_name,
     )
 
     sensors = {}
+    extrinsics = {}
     print("\nAdding cameras from URDF frames:")
 
     for cam_name, frame_name in CAMERA_FRAME_MAP.items():
@@ -279,6 +306,16 @@ def add_cameras_from_urdf(builder, plant, scene_graph, renderer_name,
         parent_body = urdf_frame.body()
         parent_frame_id = plant.GetBodyFrameIdOrThrow(parent_body.index())
         X_BF = urdf_frame.GetFixedPoseInBodyFrame()
+
+        default_ctx = plant.CreateDefaultContext()
+        X_WF = urdf_frame.CalcPoseInWorld(default_ctx)
+        # Convert to 4x4 numpy array in the format expected by point_cloud_compare
+        T_cam_to_world = X_WF.GetAsMatrix4()  # shape (4,4)
+
+        # Store in a dict, convert to list for JSON serialization
+        extrinsics[cam_name] = T_cam_to_world.tolist()
+
+        print(f"  {cam_name:20s} cam_to_world =\n{T_cam_to_world}")
 
         sensor = builder.AddSystem(RgbdSensor(
             parent_id=parent_frame_id,
@@ -298,6 +335,12 @@ def add_cameras_from_urdf(builder, plant, scene_graph, renderer_name,
         builder.Connect(sensor.depth_image_32F_output_port(), saver.get_input_port(1))
 
         sensors[cam_name] = sensor
+
+        ext_path = Path(save_dir) / "sim_cameras_extrinsics.json"
+        ext_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(ext_path, "w") as f:
+            json.dump(extrinsics, f, indent=2)
+        print(f"\n[Extrinsics] Saved camera extrinsics to {ext_path}")
 
         default_ctx = plant.CreateDefaultContext()
         X_WF = urdf_frame.CalcPoseInWorld(default_ctx)
@@ -343,43 +386,6 @@ def load_cube_urdf(mass: float, friction: float, side: float) -> str:
     set_or_create(contact, "spinning_friction", 0.001)
 
     return ET.tostring(root, encoding="unicode")
-
-
-# Config
-
-REPLAY_CONFIG = {
-    "data_root": "./data/pick_place_3",
-    "episode_index": 0,
-    "source_col": "observation.state",
-    "save_dir": f"simulation_frames/replay_{int(time.time())}",
-    "cube_mass": 0.05,
-    "cube_friction": 0.8,
-    "cube_side": 0.02,
-    # Starting position of the cube in the sim
-    # "cube_position": [-0.010, -0.197, 0.015],
-    # "cube_position": [-0.0105, -0.1844, 0.0983],
-    # "cube_position": [-0.0114, -0.1735, 0.0716],
-    "cube_position": [-0.0100, -0.1950, 0.0120],  # pick_place_3
-    # "cube_position": [-0.3338, 0.0076, 0.0166],    # pick_place_center_2
-    # "lights": [
-    #     LightParameter(
-    #         type="directional",
-    #         direction=[0.5, -0.5, -1.0],
-    #         color=Rgba(1.0, 0.95, 0.85, 1.0),
-    #         intensity=2.5,
-    #         frame="world",
-    #     )
-    # ],
-    "lights": [
-        LightParameter(
-            type="directional",
-            direction=[0.0, 0.0, -1.0],
-            color=Rgba(0.8, 0.8, 0.8, 1.0),
-            intensity=1.2,
-            frame="world",
-        )
-    ],
-}
 
 
 def run_simulation(config: dict):
@@ -432,7 +438,7 @@ def run_simulation(config: dict):
         builder, plant, scene_graph,
         renderer_name=renderer_name,
         save_dir=config["save_dir"],
-        save_interval=0.5,
+        save_interval=config["sim_save_interval"],
     )
 
     meshcat = StartMeshcat()
@@ -465,20 +471,6 @@ def run_simulation(config: dict):
         plant.get_joint_actuator(idx).joint().name() for idx in actuator_indices
     ]
     gripper_cols = [i for i, name in enumerate(drake_joint_names) if "carriage" in name.lower()]
-
-    # Harcoded grasp/release to pinch hold the cube, since the recorded gripper values are not reliable.
-    # grasp window from gripper data
-    t_grasp, t_release = 12.47, 20.43
-    grasp_mask = (times >= t_grasp) & (times <= t_release)
-
-    fully_closed_value = 0.0
-    grasp_row_idx = np.where(grasp_mask)[0]
-    q_drake_order[np.ix_(grasp_row_idx, gripper_cols)] = fully_closed_value
-
-    for col in gripper_cols:
-        q_drake_order[grasp_mask, col] = fully_closed_value
-
-    print(q_drake_order[grasp_mask][:, gripper_cols][:5])  # sanity check after the fix
 
     controller = builder.AddSystem(ReplayController(times, q_drake_order, nu))
 
@@ -574,12 +566,6 @@ def run_simulation(config: dict):
             right_finger_pos_log[i] = rf_pos
             gripper_gap_log[i] = np.linalg.norm(lf_pos - rf_pos)
 
-        # at t=12.47s in sim log, find the matching index and print:
-        idx = np.argmin(np.abs(log_times - 12.47))
-        print(f"gripper_gap at grasp = {gripper_gap_log[idx]*100:.3f} cm")
-        midpoint = (left_finger_pos_log[idx] + right_finger_pos_log[idx]) / 2
-        print(f"finger midpoint at t={log_times[idx]:.2f}s: {midpoint}")
-
         np.savez_compressed(
             os.path.join(config["save_dir"], "gripper_trace.npz"),
             times=log_times,
@@ -615,6 +601,57 @@ def run_simulation(config: dict):
     except KeyboardInterrupt:
         EventStatus.Killed(diagram, "Simulation stopped by user.")
 
+def parse_args():
+    p = argparse.ArgumentParser(description="Replay a recorded LeRobot teleop episode in sim")
+
+    p.add_argument("--data-root", type=str, default="./data/pick_place_depth_1",
+                    help="Path to the LeRobot dataset root")
+    p.add_argument("--episode-index", type=int, default=0)
+    p.add_argument("--source-col", type=str, default="observation.state",
+                    choices=["observation.state", "action"],
+                    help="'observation.state' = what the follower measured (faithful replay); "
+                         "'action' = what the leader commanded")
+
+    p.add_argument("--save-dir", type=str, default=None,
+                    help="Defaults to simulation_frames/replay_<timestamp>")
+
+    p.add_argument("--cube-mass", type=float, default=0.05)
+    p.add_argument("--cube-friction", type=float, default=0.8)
+    p.add_argument("--cube-side", type=float, default=0.038)
+    p.add_argument("--cube-position", type=str, default="pick_place", choices=list(CUBE_POSITIONS.keys()))
+
+    p.add_argument("--lights", type=str, default="warm", choices=list(LIGHT_VARIATIONS.keys()))
+
+    p.add_argument("--real-fps", type=float, default=30.0,
+                    help="Real camera capture fps, used to derive the sim frame save interval")
+    p.add_argument("--ffmpeg-stride", type=int, default=10,
+                    help="Frame stride used when extracting real comparison PNGs via ffmpeg "
+                         "(select=not(mod(n,STRIDE))); sim save interval = STRIDE / real-fps")
+
+    args = p.parse_args()
+
+    if args.save_dir is None:
+        args.save_dir = f"simulation_frames/replay_{int(time.time())}"
+
+    return args
+
+
+def build_config_from_args(args) -> dict:
+    return {
+        "data_root": args.data_root,
+        "episode_index": args.episode_index,
+        "source_col": args.source_col,
+        "save_dir": args.save_dir,
+        "cube_mass": args.cube_mass,
+        "cube_friction": args.cube_friction,
+        "cube_side": args.cube_side,
+        "cube_position": CUBE_POSITIONS.get(args.cube_position, args.cube_position),
+        "lights": LIGHT_VARIATIONS[args.lights],
+        "sim_save_interval": args.ffmpeg_stride / args.real_fps,
+    }
+
 
 if __name__ == "__main__":
-    run_simulation(REPLAY_CONFIG)
+    cli_args = parse_args()
+    config = build_config_from_args(cli_args)
+    run_simulation(config)

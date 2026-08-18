@@ -55,7 +55,7 @@ from pydrake.systems.primitives import LogVectorOutput
 # Camera specs matching real Intel RealSense D405 hardware
 CAM_WIDTH  = 640
 CAM_HEIGHT = 480
-CAM_FOCAL  = 605.0   # D405 focal length in pixels at 640×480
+CAM_FOCAL  = 370.2   # D405 focal length in pixels at 640×480
  
 # Map logical camera names → the URDF color optical frame names
 # Use the color_optical_frame because:

@@ -10,3 +10,7 @@ energy_comparison/
 state_comparison/
 state_vs_cosine_output/
 data/
+depth_comparison/
+point_cloud_comparison/
+real_calib_with_extrinsics.json
+sim_calib_with_extrinsics.json

@@ -1165,7 +1165,7 @@
     <actuator name="follower_left_motor_0">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_left_trans_1">
@@ -1176,7 +1176,7 @@
     <actuator name="follower_left_motor_1">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_left_trans_2">
@@ -1187,7 +1187,7 @@
     <actuator name="follower_left_motor_2">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_left_trans_3">
@@ -1198,7 +1198,7 @@
     <actuator name="follower_left_motor_3">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_left_trans_4">
@@ -1209,7 +1209,7 @@
     <actuator name="follower_left_motor_4">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_left_trans_5">
@@ -1220,7 +1220,7 @@
     <actuator name="follower_left_motor_5">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_left_left_carriage_trans">
@@ -1231,7 +1231,7 @@
     <actuator name="follower_left_left_carriage_motor">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_right_trans_0">
@@ -1242,7 +1242,7 @@
     <actuator name="follower_right_motor_0">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_right_trans_1">
@@ -1253,7 +1253,7 @@
     <actuator name="follower_right_motor_1">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_right_trans_2">
@@ -1264,7 +1264,7 @@
     <actuator name="follower_right_motor_2">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_right_trans_3">
@@ -1275,7 +1275,7 @@
     <actuator name="follower_right_motor_3">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_right_trans_4">
@@ -1286,7 +1286,7 @@
     <actuator name="follower_right_motor_4">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_right_trans_5">
@@ -1297,7 +1297,7 @@
     <actuator name="follower_right_motor_5">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
   <transmission name="follower_right_left_carriage_trans">
@@ -1308,7 +1308,7 @@
     <actuator name="follower_right_left_carriage_motor">
       <hardwareInterface>PositionJointInterface</hardwareInterface>
       <mechanicalReduction>1</mechanicalReduction>
-      <drake:controller_gains p="100" d="10"/>
+      <drake:controller_gains p="500" d="50"/>
     </actuator>
   </transmission>
 </robot>
