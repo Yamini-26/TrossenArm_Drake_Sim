@@ -20,9 +20,29 @@ worst  - energy distance on mean+std-pooled patch tokens (sensitive to how
          frame and a mid-trajectory reference frame per camera, so we can
          see *where* divergence is concentrated vs. spread evenly.
 
+Two comparison modes
+---------------------
+compare (default) - the original behaviour: --features_a and --features_b
+    are two SEPARATE runs (e.g. real vs sim, or two sim seeds), aligned
+    frame-by-frame by index (frame i of A vs frame i of B).
+
+consecutive (--consecutive) - self-comparison WITHIN one run:
+    --features_b is not needed. Frame i of --features_a is instead
+    compared against frame i+--stride of the SAME run, so every metric
+    above (energy distance, per-frame cosine similarity, heatmaps,
+    timeline) now answers "how much did this camera's view change from
+    frame t to frame t+stride" over the whole trajectory. Static
+    background patches score ~1.0 cosine sim at every step; the score
+    only drops where something actually moved (arm swinging, cube
+    picked/dropped/missed). --stride=1 -> consecutive frames; set it to
+    your camera's fps for a ~1-second-apart comparison instead. The
+    'worst' metric with an aggressive --agg (p5 or min) is the sharpest
+    version of this: it flags the single moment + spot where the biggest
+    localized change happened, ignoring smooth/global drift.
+
 Usage
 -----
-Run everything (all three metrics), all cameras:
+Run everything (all three metrics), all cameras, real vs sim:
     python energy_stats_compare.py --features_a dino_features/replay_1785878156/ --features_b dino_features/replay_1785878650/ --output energy_comparison/replay_1785878156_vs_1785878650
 
 Just the worst-patch metric with a more aggressive percentile:
@@ -30,6 +50,10 @@ Just the worst-patch metric with a more aggressive percentile:
 
 Just CLS, one camera:
     python energy_stats_compare.py --features_a dino_features/replay_1785878156/ --features_b dino_features/replay_1785878650/ --metrics cls --cameras cam_high
+
+Consecutive-frame self-comparison within one sim run (find exactly which
+frame + which patch moved the most, worst metric, single worst patch):
+    python energy_stats_compare.py --features_a dino_features/replay_1785878156/ --consecutive --stride 1 --metrics worst --agg min --output energy_comparison/replay_1785878156_consecutive
 """
 import argparse
 import json
@@ -67,6 +91,27 @@ def load_features(features_dir: Path, cam: str) -> Dict[str, Optional[np.ndarray
         print(f"  [{cam}] loaded patch {patch_arr.shape} from {patch_path.name}")
 
     return {"cls": cls_arr, "patch": patch_arr}
+
+
+def shift_features(feats: Dict[str, Optional[np.ndarray]], stride: int) -> Dict[str, Optional[np.ndarray]]:
+    """
+    [--consecutive] Build a synthetic 'run B' by shifting run A's own
+    per-frame arrays forward by `stride` frames. Downstream, every
+    frame-by-frame comparison aligns by min(len(A), len(B)) and takes the
+    first N of each -- so pairing feats_a (full length T) against this
+    shifted array (length T-stride) makes frame i of A line up against
+    frame i+stride of A, for i in [0, T-stride).
+    """
+    out: Dict[str, Optional[np.ndarray]] = {}
+    for key, arr in feats.items():
+        if arr is None:
+            out[key] = None
+            continue
+        if len(arr) <= stride:
+            raise ValueError(f"need more than {stride} frame(s) for --consecutive at "
+                              f"stride={stride}, got {len(arr)}")
+        out[key] = arr[stride:]
+    return out
 
 
 #  Energy distance (operates on whatever (N, D) vectors - raw CLS tokens or pooled patch tokens)
@@ -243,7 +288,8 @@ def plot_energy_breakdown(metrics: Dict[str, Dict], output_path: Path, title_suf
 
 
 def plot_pca(feats_a: np.ndarray, feats_b: np.ndarray, cam_name: str, feature_label: str,
-             output_path: Path, n_samples: int = 300):
+             output_path: Path, n_samples: int = 300,
+             label_a: str = "Run A", label_b: str = "Run B"):
     """2D PCA scatter of the given (N, D) features to visualise distribution overlap."""
     rng = np.random.default_rng(42)
     A = feats_a[rng.choice(len(feats_a), min(n_samples, len(feats_a)), replace=False)]
@@ -252,8 +298,8 @@ def plot_pca(feats_a: np.ndarray, feats_b: np.ndarray, cam_name: str, feature_la
     both = pca.fit_transform(np.vstack([A, B]))
     na = len(A)
     fig, ax = plt.subplots(figsize=(6, 5))
-    ax.scatter(both[:na, 0], both[:na, 1], s=12, alpha=0.6, label="Run A", color="#3498DB")
-    ax.scatter(both[na:, 0], both[na:, 1], s=12, alpha=0.6, label="Run B", color="#E74C3C")
+    ax.scatter(both[:na, 0], both[:na, 1], s=12, alpha=0.6, label=label_a, color="#3498DB")
+    ax.scatter(both[na:, 0], both[na:, 1], s=12, alpha=0.6, label=label_b, color="#E74C3C")
     ax.set_title(f"{cam_name} - PCA of {feature_label}")
     ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)")
     ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)")
@@ -288,7 +334,8 @@ def plot_patch_similarity_heatmap(sim_map_1d: np.ndarray, grid_size: int, cam_na
 
 #  Metric pipelines
 
-def run_cls_metric(cls_a: np.ndarray, cls_b: np.ndarray, cam: str, args, output_dir: Path) -> Tuple[Dict, np.ndarray]:
+def run_cls_metric(cls_a: np.ndarray, cls_b: np.ndarray, cam: str, args, output_dir: Path,
+                    label_a: str = "Run A", label_b: str = "Run B") -> Tuple[Dict, np.ndarray]:
     print(f"  [cls] energy distance (n_samples={args.n_samples}) ...")
     ed = energy_distance(cls_a, cls_b, n_samples=args.n_samples)
     cos_sim = cosine_similarity_per_frame_cls(cls_a, cls_b)
@@ -296,7 +343,8 @@ def run_cls_metric(cls_a: np.ndarray, cls_b: np.ndarray, cam: str, args, output_
           f"cos_sim mean={cos_sim.mean():.4f} min={cos_sim.min():.4f}")
 
     np.save(output_dir / f"cos_sim_cls_{cam}.npy", cos_sim)
-    plot_pca(cls_a, cls_b, cam, "DINO CLS features", output_dir / f"pca_cls_{cam}.png")
+    plot_pca(cls_a, cls_b, cam, "DINO CLS features", output_dir / f"pca_cls_{cam}.png",
+              label_a=label_a, label_b=label_b)
 
     metrics = {**ed, "mean_cos_sim": round(float(cos_sim.mean()), 4),
                "min_cos_sim": round(float(cos_sim.min()), 4), "n_frames": int(len(cos_sim))}
@@ -305,7 +353,8 @@ def run_cls_metric(cls_a: np.ndarray, cls_b: np.ndarray, cam: str, args, output_
 
 def run_patch_based_metric(metric_name: str, patch_a: np.ndarray, patch_b: np.ndarray, cam: str,
                             args, output_dir: Path, pool_mode: str, agg_mode: str,
-                            heatmap_frames: List[str]) -> Tuple[Dict, np.ndarray]:
+                            heatmap_frames: List[str],
+                            label_a: str = "Run A", label_b: str = "Run B") -> Tuple[Dict, np.ndarray]:
     print(f"  [{metric_name}] energy distance (pool={pool_mode}, n_samples={args.n_samples}) ...")
     pooled_a = pool_patch_tokens(patch_a, mode=pool_mode)
     pooled_b = pool_patch_tokens(patch_b, mode=pool_mode)
@@ -318,7 +367,7 @@ def run_patch_based_metric(metric_name: str, patch_a: np.ndarray, patch_b: np.nd
 
     np.save(output_dir / f"cos_sim_{metric_name}_{cam}.npy", cos_sim)
     plot_pca(pooled_a, pooled_b, cam, f"{pool_mode}-pooled patch features",
-              output_dir / f"pca_{metric_name}_{cam}.png")
+              output_dir / f"pca_{metric_name}_{cam}.png", label_a=label_a, label_b=label_b)
 
     if heatmap_frames:
         grid_size = infer_grid_size(patch_a.shape[1])
@@ -372,6 +421,15 @@ INTERPRETATION GUIDE
     -> 1.0      frames are visually identical (by this metric)
     < 0.90      noticeable per-frame visual difference
     < 0.75      significant frame-level divergence
+
+  --consecutive mode specifically:
+    Read the timeline like a motion trace, not a real-vs-sim gap: it
+    should sit near 1.0 during idle/settling frames and dip whenever the
+    camera's view actually changes (arm moving, cube picked/dropped). A
+    dip that shows up in real's timeline but NOT in sim's (or vice versa)
+    at the corresponding trajectory step, together with the worst-frame
+    heatmap lighting up on the cube/gripper rather than the background, is
+    the "cube missed/misplaced" signal.
 """
 
 
@@ -406,8 +464,21 @@ def main():
     parser.add_argument("--features_a", required=True,
                          help="Directory of {cam}_cls.npy / {cam}_patch.npy for run A "
                               "(output of dino_feature_extractor.py --run_dir --save_features)")
-    parser.add_argument("--features_b", required=True,
-                         help="Directory of {cam}_cls.npy / {cam}_patch.npy for run B")
+    parser.add_argument("--features_b", default=None,
+                         help="Directory of {cam}_cls.npy / {cam}_patch.npy for run B. "
+                              "Required unless --consecutive is set.")
+    parser.add_argument("--consecutive", action="store_true",
+                         help="Self-comparison mode: instead of comparing --features_a against a "
+                              "separate --features_b run, compare each frame in --features_a to a "
+                              "frame --stride steps later WITHIN THE SAME run (frame_t vs "
+                              "frame_{t+stride}). Highlights exactly where/when content actually "
+                              "changes (arm moving, cube picked/dropped/missed) since static "
+                              "background patches stay near cosine sim 1.0 at every step. "
+                              "--features_b is ignored/not required in this mode.")
+    parser.add_argument("--stride", type=int, default=1,
+                         help="[--consecutive] frame gap to compare over: 1 = consecutive frames, "
+                              "or set to your camera's frames-per-second for a ~1-second-apart "
+                              "comparison instead. Ignored unless --consecutive is set.")
     parser.add_argument("--output", default="energy_comparison", help="Output directory for plots and report")
     parser.add_argument("--n_samples", type=int, default=500,
                          help="Frames to subsample per run for energy distance (default 500)")
@@ -416,10 +487,16 @@ def main():
                          help="Which metric(s) to compute (default: all three)")
     parser.add_argument("--agg", default="p10", choices=list(AGG_FUNCS.keys()),
                          help="Per-frame patch aggregation used by the 'worst' metric "
-                              "(default p10; try p5 or min for a more localized/aggressive signal)")
+                              "(default p10; try p5 or min for a more localized/aggressive signal -- "
+                              "min is the strongest choice for --consecutive, since it reports "
+                              "whatever single patch changed the most that step)")
     args = parser.parse_args()
 
-    features_a, features_b = Path(args.features_a), Path(args.features_b)
+    if not args.consecutive and not args.features_b:
+        parser.error("--features_b is required unless --consecutive is set")
+
+    features_a = Path(args.features_a)
+    features_b = Path(args.features_b) if args.features_b else None
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -428,11 +505,17 @@ def main():
         metrics_requested = {"cls", "patch", "worst"}
 
     print(f"Run A features : {features_a}")
-    print(f"Run B features : {features_b}")
+    if args.consecutive:
+        print(f"Mode           : consecutive (self-comparison, stride={args.stride} frame(s))")
+    else:
+        print(f"Run B features : {features_b}")
     print(f"Output         : {output_dir}")
     print(f"Cameras        : {args.cameras}")
     print(f"Metrics        : {sorted(metrics_requested)}")
     print(f"Subsample size : {args.n_samples} frames per run\n")
+
+    label_a = "frame t" if args.consecutive else "Run A"
+    label_b = f"frame t+{args.stride}" if args.consecutive else "Run B"
 
     all_metrics: Dict[str, Dict[str, Dict]] = {m: {} for m in metrics_requested}
     all_cos_sims: Dict[str, Dict[str, np.ndarray]] = {m: {} for m in metrics_requested}
@@ -441,8 +524,11 @@ def main():
         print(f"\n-- Camera: {cam} --")
         try:
             feats_a = load_features(features_a, cam)
-            feats_b = load_features(features_b, cam)
-        except FileNotFoundError as e:
+            if args.consecutive:
+                feats_b = shift_features(feats_a, args.stride)
+            else:
+                feats_b = load_features(features_b, cam)
+        except (FileNotFoundError, ValueError) as e:
             print(f"  [SKIP] {e}")
             continue
 
@@ -450,7 +536,8 @@ def main():
             if feats_a["cls"] is None or feats_b["cls"] is None:
                 print(f"  [SKIP cls] no CLS features for {cam}")
             else:
-                m, cs = run_cls_metric(feats_a["cls"], feats_b["cls"], cam, args, output_dir)
+                m, cs = run_cls_metric(feats_a["cls"], feats_b["cls"], cam, args, output_dir,
+                                        label_a=label_a, label_b=label_b)
                 all_metrics["cls"][cam] = m
                 all_cos_sims["cls"][cam] = cs
 
@@ -460,7 +547,8 @@ def main():
             else:
                 spec = METRIC_SPECS["patch"]
                 m, cs = run_patch_based_metric("patch", feats_a["patch"], feats_b["patch"], cam, args,
-                                                output_dir, spec["pool"], spec["agg"], spec["heatmaps"])
+                                                output_dir, spec["pool"], spec["agg"], spec["heatmaps"],
+                                                label_a=label_a, label_b=label_b)
                 all_metrics["patch"][cam] = m
                 all_cos_sims["patch"][cam] = cs
 
@@ -470,15 +558,17 @@ def main():
             else:
                 spec = METRIC_SPECS["worst"]
                 m, cs = run_patch_based_metric("worst", feats_a["patch"], feats_b["patch"], cam, args,
-                                                output_dir, spec["pool"], args.agg, spec["heatmaps"])
+                                                output_dir, spec["pool"], args.agg, spec["heatmaps"],
+                                                label_a=label_a, label_b=label_b)
                 all_metrics["worst"][cam] = m
                 all_cos_sims["worst"][cam] = cs
 
+    timeline_suffix = f" -- self, frame t vs t+{args.stride}" if args.consecutive else " -- run A vs run B"
     for metric_name, cos_sims in all_cos_sims.items():
         if cos_sims:
             plot_similarity_timeline(
                 cos_sims, output_dir / f"cosine_similarity_timeline_{metric_name}.png",
-                title=f"Per-frame cosine similarity ({metric_name}) -- run A vs run B")
+                title=f"Per-frame cosine similarity ({metric_name}){timeline_suffix}")
 
     for metric_name, cams in all_metrics.items():
         if cams:

@@ -95,7 +95,8 @@ LIGHT_VARIATIONS = {
 }
 
 CUBE_POSITIONS = {
-    "pick_place": [-0.0900, -0.1710, 0.0180],
+    "pick_place": [-0.0050, -0.1710, 0.0180], # initial position
+    "pick_place_misplaced": [-0.0900, -0.1710, 0.0180], # misplaced initial position
     "pick_place_center": [-0.3538, 0.0036, 0.0180],
 }
 

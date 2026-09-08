@@ -14,3 +14,4 @@ depth_comparison/
 point_cloud_comparison/
 real_calib_with_extrinsics.json
 sim_calib_with_extrinsics.json
+click_analysis/

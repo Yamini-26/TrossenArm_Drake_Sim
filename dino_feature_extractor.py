@@ -15,24 +15,57 @@ Three analysis modes, each independently selectable via --analysis:
            K worst-matching (lowest similarity) patches per pair, so you
            can see *where* real and sim diverge most
 
-Background / motion masking
+NEW: background / motion masking
+---------------------------------
+Real-vs-sim comparisons get diluted (or actively fooled) by background
+patches that never move but look different across the real/sim domain gap
+(lighting, render style, camera noise, ...). Instead of hand-cropping a
+camera's field of view, you can compute a per-camera, per-patch "motion
+mask" from an ordered frame sequence (--run_dir legacy mode):
 
     patches that barely change over the whole trajectory  -> background,
-    patches that change a lot (arm, cube, gripper)        -> foreground
+    patches that change a lot (arm, cube, gripper)          -> foreground
 
-Use that mask to down-weight background patches (mean-similarity
+and use that mask to down-weight background patches (mean-similarity
 metrics) or exclude them entirely (worst-patch search) when comparing real
 vs sim frames. See --save_motion_mask / --motion_mask_dir below.
 
-Multi-camera combination
+There are now two ways to build that per-camera mask, chosen with
+--motion_mask_method:
+  mean_dev  (default, original behaviour) - each patch's weight is how far
+            its feature drifts from the trajectory's own mean feature.
+  temporal  (new)                          - each patch's weight is how much
+            its feature changes frame-to-frame (or over a ~1s window), see
+            "consecutive-frame diff" below.
 
+NEW: consecutive-frame ("temporal") diff
+-----------------------------------------
+Rather than compare each frame to the trajectory mean, this compares
+consecutive frames (or frames a fixed number of steps apart, e.g. "1 second
+of playback") to each other: sim_frame_0 vs sim_frame_1, sim_frame_1 vs
+sim_frame_2, ... (and the same for real). Static background patches diff to
+~0 every step; only patches that are actually changing (arm, gripper, cube)
+produce a non-zero diff. This is the --motion_mask_method temporal option
+above, and it's also exposed as a standalone real-vs-sim comparison: since
+real and sim replay the *same* commanded trajectory, their frame-to-frame
+diff patterns should look similar wherever it's just the arm/gripper
+moving, and that shared pattern cancels out when you take
+|real_temporal_map - sim_temporal_map|. What's left over is concentrated on
+patches where real and sim actually diverged -- e.g. the cube got picked up
+in one but not the other. See --real_run_dir / --sim_run_dir below, which
+saves that delta directly as a <camera>_motion_mask.npy so it's a drop-in
+for --motion_mask_dir / --motion_mask_camera in the normal --input_dir
+pipeline.
+
+NEW: multi-camera combination
+------------------------------
 Run the normal --input_dir pipeline once per camera (each produces its own
 summary.json), then combine the per-camera real-vs-sim scores into one
 number per action pair with --combine_cameras / --camera_weights. See
 combine_camera_scores() below.
 
 Usage
-
+-----
 Compare a folder of real_*/sim_* frames with DINOv2, all analyses:
     python dino_feature_extractor.py --input_dir simulation_frames/test_frames_real/cam_right_wrist --output dino_features/test_frames_real/cam_right_wrist/ --model_version v2
 
@@ -46,11 +79,23 @@ Legacy run/camera-directory mode (single run, no real/sim comparison, just
 per-camera self-similarity heatmaps e.g. PCA/norm/cluster over patches):
     python dino_feature_extractor.py --run_dir simulation_frames/replay_1785878156/ --output dino_features/replay_1785878156_v3/ --model_version v3 --save_features --generate_self_heatmaps --heatmap_mode pca
 
-Compute a motion mask for cam_high from the full real trajectory sequence:
-    python dino_feature_extractor.py --run_dir data/pick_place_depth_3/frames/ --output dino_features/pick_place_depth_3/real/ --model_version v3 --cameras cam_high cam_low cam_right_wrist --save_motion_mask
+Compute a motion mask for cam_high from the full real trajectory sequence
+(original "distance from trajectory mean" method):
+    python dino_feature_extractor.py --run_dir simulation_frames/real_run_001/ --output dino_features/masks/ --model_version v3 --cameras cam_high --save_motion_mask
 
-Use that mask when comparing real vs sim on cam_high:
+Same, but using consecutive-frame diffs instead (mean of frame-to-frame diff
+over the run, rather than distance from the mean feature):
+    python dino_feature_extractor.py --run_dir simulation_frames/real_run_001/ --output dino_features/masks/ --model_version v3 --cameras cam_high --save_motion_mask --motion_mask_method temporal --temporal_stride 1 --temporal_agg mean
+
+Use that mask when comparing real vs sim on cam_high (down-weights static
+background patches in the "patch" score, excludes them from "worst"):
     python dino_feature_extractor.py --input_dir simulation_frames/test_frames_real/cam_high/ --output dino_features/test_frames_real/cam_high/ --model_version v3 --motion_mask_dir dino_features/masks/ --motion_mask_camera cam_high
+
+Build a real-vs-sim "where did the trajectories actually diverge" mask
+straight from two ordered/matched run directories (same replayed
+trajectory, one captured on the real robot, one in sim) using
+consecutive-frame diffs, and save it as a ready-to-use motion mask:
+    python dino_feature_extractor.py --real_run_dir simulation_frames/real_run_001/ --sim_run_dir simulation_frames/sim_run_001/ --output dino_features/masks/ --model_version v3 --cameras cam_high --temporal_stride 1 --temporal_agg mean
 
 Combine cam_high + cam_right_wrist real-vs-sim "patch" scores (weighted 30/70):
     python dino_feature_extractor.py --output dino_features/combined/ --model_version v3 --combine_cameras cam_high=dino_features/test_frames_real/cam_high cam_right_wrist=dino_features/test_frames_real/cam_right_wrist --camera_weights cam_high=0.3 cam_right_wrist=0.7 --combine_analysis patch
@@ -380,6 +425,11 @@ def compute_motion_mask(patch_seq: np.ndarray, grid: int) -> np.ndarray:
                      (static table/background)
     Use this to down-weight or exclude background patches when comparing
     real vs sim frames elsewhere in the script.
+
+    This is the "distance from the trajectory mean" method. See
+    temporal_diff_sequence() / aggregate_temporal_diff() below for an
+    alternative, frame-to-frame ("temporal") way of building the same kind
+    of (grid, grid) weight map, selectable via --motion_mask_method temporal.
     """
     norm = patch_seq / (np.linalg.norm(patch_seq, axis=-1, keepdims=True) + 1e-8)
     mean_feat = norm.mean(axis=0, keepdims=True)
@@ -391,13 +441,14 @@ def compute_motion_mask(patch_seq: np.ndarray, grid: int) -> np.ndarray:
     return weight.reshape(grid, grid)
  
  
-def plot_motion_mask(image_path: Path, mask: np.ndarray, cfg: ModelConfig, output_path: Path):
+def plot_motion_mask(image_path: Path, mask: np.ndarray, cfg: ModelConfig, output_path: Path,
+                      title: str = "motion mask (bright = foreground/dynamic)"):
     img = Image.open(image_path).convert("RGB").resize((cfg.input_size, cfg.input_size))
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
     ax1.imshow(img); ax1.set_title("reference frame"); ax1.axis("off")
     ax2.imshow(img)
     ax2.imshow(mask, cmap="hot", alpha=0.6, interpolation="nearest")
-    ax2.set_title("motion mask (bright = foreground/dynamic)")
+    ax2.set_title(title)
     ax2.axis("off")
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -467,6 +518,99 @@ def build_action_diff_mask(feats: Dict, file_to_idx: Dict, meta: Dict[str, dict]
               f"found for action-diff mask")
         return None, None
     return np.mean(masks, axis=0), ref_name
+ 
+ 
+#  Idea 3: consecutive-frame ("temporal") diff maps
+#
+# compute_motion_mask() (above) flags a patch as foreground if it drifts far
+# from the trajectory's OWN mean feature. The functions below instead look
+# at how much each patch's feature changes from one frame to the next (or
+# across a short window, e.g. "~1 second of playback"). Static background
+# patches diff to ~0 at every step in both real and sim; patches on the
+# arm/gripper/cube produce a non-zero diff whenever that content is
+# actually moving.
+#
+# The real payoff is comparing the resulting real-map and sim-map for the
+# SAME replayed trajectory (compare_temporal_diff_maps): the commanded
+# arm/gripper motion is shared, so it produces a similar frame-to-frame
+# diff pattern in both domains and mostly cancels out in the delta. What's
+# left over concentrates on patches where real and sim actually diverged --
+# e.g. the cube got picked up in one but not the other.
+ 
+def temporal_diff_sequence(patch_seq: np.ndarray, grid: int, stride: int = 1) -> np.ndarray:
+    """
+    patch_seq: (T, n_patches, dim) raw patch features for an ORDERED frame
+    sequence from one camera / one trajectory run (same shape
+    extract_features() gives you in --run_dir mode).
+    stride: frame gap to diff over.
+      stride=1              -> consecutive frame-to-frame diff (t vs t+1)
+      stride=frames_per_sec -> diff across ~1 second of playback (t vs t+fps)
+    Returns a (T - stride, grid, grid) array of per-patch diff maps, where
+    diff = 1 - cosine_similarity(patch_t, patch_{t+stride}), clipped at 0.
+    Deliberately NOT min-max normalized per frame-pair (unlike
+    compute_action_diff_mask) so magnitudes stay comparable across frames,
+    cameras, and real vs sim when you aggregate or compare them later.
+    """
+    if stride < 1:
+        raise ValueError("stride must be >= 1")
+    T = patch_seq.shape[0]
+    if T <= stride:
+        raise ValueError(f"need more than {stride} frame(s) to diff at stride={stride}, got {T}")
+    diffs = []
+    for t in range(T - stride):
+        heat = patch_heatmap(patch_seq[t], patch_seq[t + stride], grid)  # cosine sim, not diff yet
+        diffs.append(np.clip(1.0 - heat, 0, None))
+    return np.stack(diffs, axis=0)
+ 
+ 
+def aggregate_temporal_diff(diff_seq: np.ndarray, agg: str = "mean") -> np.ndarray:
+    """
+    Collapse a (T', grid, grid) sequence of per-step diff maps (from
+    temporal_diff_sequence) into one (grid, grid) map summarizing motion
+    over the whole trajectory / window.
+      agg='mean' -- average diff per patch over every step (default;
+                    robust, smooths out single-frame noise)
+      agg='max'  -- the single largest diff any step produced at that patch
+                    (more sensitive to one brief, localized event, e.g. a
+                    drop that only shows up for a couple of frames)
+    """
+    if agg == "mean":
+        return diff_seq.mean(axis=0)
+    if agg == "max":
+        return diff_seq.max(axis=0)
+    raise ValueError(f"Unknown agg mode: {agg}")
+ 
+ 
+def temporal_motion_weight(patch_seq: np.ndarray, grid: int, stride: int = 1,
+                            agg: str = "mean") -> np.ndarray:
+    """
+    Convenience wrapper: temporal_diff_sequence + aggregate_temporal_diff,
+    then min-max normalized to [0, 1] -- i.e. a drop-in alternative to
+    compute_motion_mask() for a single run/camera, built from
+    frame-to-frame diffs instead of distance-from-mean.
+    """
+    diff_seq = temporal_diff_sequence(patch_seq, grid, stride)
+    agg_map = aggregate_temporal_diff(diff_seq, agg)
+    amin, amax = agg_map.min(), agg_map.max()
+    return (agg_map - amin) / (amax - amin + 1e-8)
+ 
+ 
+def compare_temporal_diff_maps(real_map: np.ndarray, sim_map: np.ndarray) -> np.ndarray:
+    """
+    Given the aggregated (grid, grid) real and sim temporal-diff maps for
+    the SAME camera and the SAME replayed trajectory (e.g. from
+    aggregate_temporal_diff on each side), return a normalized (grid, grid)
+    map of where the two motion patterns diverge most:
+        |real_map - sim_map|, min-max normalized to [0, 1]
+    Both inputs already suppress background (static patches diff to ~0 in
+    both), and the shared commanded arm/gripper motion should produce
+    similar non-zero diffs in both -- so this delta highlights patches
+    where real and sim disagree about what actually moved, typically the
+    cube itself. High value here = likely task-relevant real/sim mismatch.
+    """
+    delta = np.abs(real_map - sim_map)
+    dmin, dmax = delta.min(), delta.max()
+    return (delta - dmin) / (dmax - dmin + 1e-8)
  
  
 #  Idea 1: combine per-camera real-vs-sim scores into one metric
@@ -835,15 +979,111 @@ def run_legacy_run_dir_mode(model, cfg: ModelConfig, transform, device: str, arg
                 print(f"  Generated {args.heatmap_mode} heatmap for frame {i}")
  
         if args.save_motion_mask:
-            if len(files) < 2:
-                print(f"  [WARN] {cam}: need >= 2 ordered frames to compute a motion mask, skipping")
+            if args.motion_mask_method == "temporal":
+                if len(files) <= args.temporal_stride:
+                    print(f"  [WARN] {cam}: need > {args.temporal_stride} ordered frames to compute "
+                        f"a temporal diff mask at this stride, skipping")
+                else:
+                    # Compute the full diff sequence (T-stride, grid, grid)
+                    diff_seq = temporal_diff_sequence(feats["patch"], cfg.grid_size, args.temporal_stride)
+                    # Aggregate for the saved mask
+                    agg_map = aggregate_temporal_diff(diff_seq, args.temporal_agg)
+                    mask = (agg_map - agg_map.min()) / (agg_map.max() - agg_map.min() + 1e-8)
+                    np.save(output_dir / f"{cam}_motion_mask.npy", mask)
+                    plot_motion_mask(files[len(files) // 2], mask, cfg,
+                                    output_dir / f"{cam}_motion_mask.png",
+                                    title=f"temporal motion mask (stride={args.temporal_stride}, "
+                                            f"agg={args.temporal_agg})")
+                    print(f"  Saved aggregated motion mask -> {output_dir / f'{cam}_motion_mask.npy'} "
+                        f"(mean weight={mask.mean():.3f})")
+
+                    # Save each step's diff map if requested
+                    if args.save_temporal_diff_maps:
+                        diff_dir = output_dir / "temporal_diff_maps" / cam
+                        diff_dir.mkdir(parents=True, exist_ok=True)
+                        # Use a middle frame as the background for all overlays (or use the first)
+                        ref_img_path = files[len(files) // 2]
+                        np.save(output_dir / f"{cam}_temporal_diff_seq.npy", diff_seq)
+
+                        for t in range(diff_seq.shape[0]):
+                            # diff_seq[t] is (grid, grid) – already in [0,1] (diff = 1 - similarity, unnormalised)
+                            # We'll re-normalise each map for better visual contrast, or keep raw.
+                            step_map = diff_seq[t]
+                            # Optional: normalise each step individually to [0,1] for visualisation
+                            # but better keep raw and use vmin=0, vmax=1 to keep absolute scale.
+                            # We'll use the plot_motion_mask function with a custom title and output path.
+                            out_path = diff_dir / f"{cam}_diff_t{t:04d}.png"
+                            plot_motion_mask(
+                                ref_img_path,
+                                step_map,
+                                cfg,
+                                out_path,
+                                title=f"diff frame {t} vs {t+args.temporal_stride} (raw)"
+                            )
+                            print(f"  Saved diff map -> {out_path}")
             else:
-                mask = compute_motion_mask(feats["patch"], cfg.grid_size)
-                np.save(output_dir / f"{cam}_motion_mask.npy", mask)
-                plot_motion_mask(files[len(files) // 2], mask, cfg,
-                                  output_dir / f"{cam}_motion_mask.png")
-                print(f"  Saved motion mask -> {output_dir / f'{cam}_motion_mask.npy'} "
-                      f"(mean weight={mask.mean():.3f})")
+                if len(files) < 2:
+                    print(f"  [WARN] {cam}: need >= 2 ordered frames to compute a motion mask, skipping")
+                else:
+                    mask = compute_motion_mask(feats["patch"], cfg.grid_size)
+                    np.save(output_dir / f"{cam}_motion_mask.npy", mask)
+                    plot_motion_mask(files[len(files) // 2], mask, cfg,
+                                      output_dir / f"{cam}_motion_mask.png")
+                    print(f"  Saved motion mask -> {output_dir / f'{cam}_motion_mask.npy'} "
+                          f"(mean weight={mask.mean():.3f})")
+ 
+ 
+#  Real-vs-sim temporal-diff comparison mode
+#  (two matched, ordered run directories -- the same trajectory replayed on
+#  the real robot and in sim -- compared camera-by-camera with consecutive-
+#  frame diffs; see "Idea 3" above.)
+ 
+def run_compare_temporal_diff_mode(model, cfg: ModelConfig, transform, device: str, args):
+    real_dir, sim_dir = Path(args.real_run_dir), Path(args.sim_run_dir)
+    output_dir = Path(args.output)
+    cameras = args.cameras or CAMERA_NAMES
+ 
+    for cam in cameras:
+        real_cam_dir, sim_cam_dir = real_dir / cam, sim_dir / cam
+        if not real_cam_dir.is_dir() or not sim_cam_dir.is_dir():
+            print(f"  [SKIP] {cam}: directory not found in real_run_dir and/or sim_run_dir")
+            continue
+        print(f"\n[{cam}]")
+ 
+        real_files = resolve_camera_files(real_dir, cam, args.frame_indices)
+        sim_files = resolve_camera_files(sim_dir, cam, args.frame_indices)
+        if len(real_files) <= args.temporal_stride or len(sim_files) <= args.temporal_stride:
+            print(f"  [WARN] {cam}: need > {args.temporal_stride} ordered frames on both sides "
+                  f"at this stride, skipping (real={len(real_files)}, sim={len(sim_files)})")
+            continue
+
+        print(f"  real: {len(real_files)} frame(s), sim: {len(sim_files)} frame(s)")
+        real_feats = extract_features(model, cfg, real_files, transform, device, args.batch_size)
+        sim_feats = extract_features(model, cfg, sim_files, transform, device, args.batch_size)
+
+        real_map = temporal_motion_weight(real_feats["patch"], cfg.grid_size,
+                                           args.temporal_stride, args.temporal_agg)
+        sim_map = temporal_motion_weight(sim_feats["patch"], cfg.grid_size,
+                                          args.temporal_stride, args.temporal_agg)
+        delta = compare_temporal_diff_maps(real_map, sim_map)
+
+        plot_motion_mask(real_files[len(real_files) // 2], real_map, cfg,
+                          output_dir / f"{cam}_real_temporal_diff.png",
+                          title=f"real temporal diff (stride={args.temporal_stride}, "
+                                f"agg={args.temporal_agg})")
+        plot_motion_mask(sim_files[len(sim_files) // 2], sim_map, cfg,
+                          output_dir / f"{cam}_sim_temporal_diff.png",
+                          title=f"sim temporal diff (stride={args.temporal_stride}, "
+                                f"agg={args.temporal_agg})")
+        # Saved with the SAME filename convention as --save_motion_mask, so it
+        # plugs straight into --motion_mask_dir / --motion_mask_camera below.
+        np.save(output_dir / f"{cam}_motion_mask.npy", delta)
+        plot_motion_mask(real_files[len(real_files) // 2], delta, cfg,
+                          output_dir / f"{cam}_motion_mask.png",
+                          title="real vs sim motion mismatch (bright = diverges most)")
+        print(f"  Saved real-vs-sim temporal mismatch mask -> "
+              f"{output_dir / f'{cam}_motion_mask.npy'} (mean={delta.mean():.3f}, "
+              f"max at row/col={np.unravel_index(np.argmax(delta), delta.shape)})")
  
  
 #  Main
@@ -875,9 +1115,11 @@ def main():
     parser.add_argument("--save_features", action="store_true", help="Save raw .npy feature arrays")
  
     # legacy run_dir mode options
-    parser.add_argument("--cameras", nargs="+", default=None, help="[run_dir mode] restrict to these cameras")
+    parser.add_argument("--cameras", nargs="+", default=None,
+                         help="[run_dir / real_run_dir+sim_run_dir modes] restrict to these cameras")
     parser.add_argument("--frame_indices", type=int, nargs="+", default=None,
-                         help="[run_dir mode] only extract these frame positions per camera")
+                         help="[run_dir / real_run_dir+sim_run_dir modes] only extract these frame "
+                              "positions per camera")
     parser.add_argument("--generate_self_heatmaps", action="store_true",
                          help="[run_dir mode] generate per-frame PCA/norm/cluster heatmaps")
     parser.add_argument("--heatmap_mode", default="pca", choices=["pca", "norm", "cluster"])
@@ -887,9 +1129,15 @@ def main():
     parser.add_argument("--save_motion_mask", action="store_true",
                          help="[run_dir mode] compute + save a per-camera motion mask from the "
                               "ordered frame sequence (background patches get low weight)")
+    parser.add_argument("--motion_mask_method", choices=["mean_dev", "temporal"], default="mean_dev",
+                         help="[run_dir mode, --save_motion_mask] how to build the mask: 'mean_dev' "
+                              "(default, original behaviour) weighs each patch by its distance from "
+                              "the trajectory's own mean feature; 'temporal' weighs each patch by its "
+                              "average/max frame-to-frame diff (see --temporal_stride/--temporal_agg).")
     parser.add_argument("--motion_mask_dir", default=None,
                          help="[input_dir mode] directory containing precomputed "
-                              "<camera>_motion_mask.npy (from --save_motion_mask) to apply")
+                              "<camera>_motion_mask.npy (from --save_motion_mask, or from "
+                              "--real_run_dir/--sim_run_dir) to apply")
     parser.add_argument("--motion_mask_camera", default=None,
                          help="[input_dir mode] which camera's mask to load from --motion_mask_dir")
     parser.add_argument("--mask_mode", choices=["hard", "soft"], default="hard",
@@ -916,6 +1164,28 @@ def main():
                          help="[input_dir mode] which source's images to pair up for --diff_mask_actions "
                               "(sim is usually best: you control lighting/pose exactly, so the diff "
                               "isolates the cube cleanly)")
+ 
+    # consecutive-frame ("temporal") diff (Idea 3)
+    parser.add_argument("--real_run_dir", default=None,
+                         help="[temporal-diff compare mode] ordered real-robot cam_*/ frame "
+                              "directories for a trajectory replay, matched frame-for-frame (same "
+                              "commanded trajectory) with --sim_run_dir. Requires --sim_run_dir too.")
+    parser.add_argument("--sim_run_dir", default=None,
+                         help="[temporal-diff compare mode] the matching sim replay of the same "
+                              "trajectory as --real_run_dir, same cam_*/ layout.")
+    parser.add_argument("--temporal_stride", type=int, default=1,
+                         help="[--save_motion_mask --motion_mask_method temporal, or "
+                              "--real_run_dir/--sim_run_dir] frame gap to diff over: 1 = consecutive "
+                              "frames, or set to your camera's frames-per-second for a ~1-second "
+                              "window diff instead.")
+    parser.add_argument("--temporal_agg", choices=["mean", "max"], default="mean",
+                         help="[--save_motion_mask --motion_mask_method temporal, or "
+                              "--real_run_dir/--sim_run_dir] how to collapse the per-step diffs over "
+                              "the run: 'mean' (default, smoother) or 'max' (catches a brief, "
+                              "localized event like a drop).")
+    parser.add_argument("--save_temporal_diff_maps", action="store_true",
+                    help="[run_dir mode, --motion_mask_method temporal] save every per-step "
+                         "diff map (frame t vs t+stride) as a PNG, not just the aggregated mask.")
  
     # multi-camera combination (Idea 1)
     parser.add_argument("--combine_cameras", nargs="+", default=None,
@@ -965,13 +1235,19 @@ def main():
         print(f"\nSaved combined summary -> {output_dir / 'combined_summary.json'}")
         return
  
-    if not args.input_dir and not args.run_dir:
+    if not args.input_dir and not args.run_dir and not (args.real_run_dir or args.sim_run_dir):
         parser.error("must specify --input_dir (real_/sim_ pairs), --run_dir (legacy / motion mask), "
-                      "or --combine_cameras")
+                      "--real_run_dir + --sim_run_dir (temporal-diff compare), or --combine_cameras")
+    if bool(args.real_run_dir) != bool(args.sim_run_dir):
+        parser.error("--real_run_dir and --sim_run_dir must be given together")
  
     print(f"Device : {args.device}")
     model, cfg = load_model(args.model_version, args.device)
     transform = make_transform(cfg)
+ 
+    if args.real_run_dir and args.sim_run_dir:
+        run_compare_temporal_diff_mode(model, cfg, transform, args.device, args)
+        return
  
     if args.input_dir:
         input_dir = Path(args.input_dir)
