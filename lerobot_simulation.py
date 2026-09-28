@@ -95,7 +95,7 @@ LIGHT_VARIATIONS = {
 }
 
 CUBE_POSITIONS = {
-    "pick_place": [-0.0050, -0.1710, 0.0180], # initial position
+    "pick_place": [-0.0180, -0.1740, 0.0180], # initial position
     "pick_place_misplaced": [-0.0900, -0.1710, 0.0180], # misplaced initial position
     "pick_place_center": [-0.3538, 0.0036, 0.0180],
 }
@@ -142,6 +142,20 @@ def load_episode(data_root, episode_index, source_col="observation.state",
     print(f"Loaded {parquet_path}  (source={source_col})")
     print(f"  frames: {q.shape[0]}, duration: {times[-1]:.2f}s")
     return times, q
+
+
+def detect_grasp_window(times, gripper_vals):
+    """Detect the [close, release] time span of a gripper trace by finding
+    where it deviates furthest from its starting (assumed-open) value and
+    returns back close to it. Direction-agnostic (works whether "closed"
+    means a higher or lower raw joint value than "open")."""
+    open_val = gripper_vals[0]
+    deviation = np.abs(gripper_vals - open_val)
+    if deviation.max() < 1e-6:
+        return None
+    grasped = deviation > 0.5 * deviation.max()
+    idx = np.flatnonzero(grasped)
+    return times[idx[0]], times[idx[-1]]
 
 
 def build_actuator_reorder(plant, lerobot_names=LEROBOT_JOINT_ORDER):
@@ -473,6 +487,87 @@ def run_simulation(config: dict):
     ]
     gripper_cols = [i for i, name in enumerate(drake_joint_names) if "carriage" in name.lower()]
 
+    wants_drop_midway = config.get("drop_midway") or config.get("drop_time") is not None
+    wants_miss_pick = config.get("miss_pick")
+
+    if wants_drop_midway or wants_miss_pick:
+        right_gripper_cols = [
+            i for i in gripper_cols if "follower_right" in drake_joint_names[i].lower()
+        ]
+        if not right_gripper_cols:
+            raise ValueError("Could not find any right-arm gripper actuator columns.")
+        gripper_vals = q_drake_order[:, right_gripper_cols[0]].copy()
+        window = detect_grasp_window(times, gripper_vals)
+        if window is None:
+            raise ValueError("Could not detect a grasp window in the right gripper "
+                              "trace -- gripper value never changes in this episode.")
+        grasp_time, release_time = window
+        print(f"[GRASP] Detected right-gripper closed window: "
+              f"grasp t={grasp_time:.2f}s -> release t={release_time:.2f}s "
+              f"(note: for episodes with a pre-shape/pre-open motion or a "
+              f"pick-place-then-return cycle, this simple detector can be "
+              f"off -- cross-check against the real footage and prefer an "
+              f"explicit --drop-time over the auto midpoint)")
+
+        # NOTE: the recorded joint's own resting value (frame 0) is NOT a
+        # safe "open" reference -- for this gripper the URDF's prismatic
+        # carriage joint is defined with lower=0.0 (closed end) and
+        # upper=0.044 (fully open), and this particular recording happens to
+        # rest at ~0 (closed) at t=0, not open. Overriding toward that value
+        # while the cube is still held just commands MORE closure, which the
+        # cube's own geometry physically blocks -- the finger stalls against
+        # it instead of releasing. Use the joint's real upper position limit
+        # instead, which is unambiguously "fully open" regardless of what
+        # value this recording happened to start at.
+        right_joint = plant.get_joint_actuator(actuator_indices[right_gripper_cols[0]]).joint()
+        open_val = right_joint.position_upper_limits()[0]
+        print(f"[GRASP] Using joint '{right_joint.name()}' upper limit "
+              f"{open_val:.4f} as the fully-open target (recorded frame-0 "
+              f"value was {gripper_vals[0]:.4f}, which is this joint's "
+              f"CLOSED end, not open)")
+
+        if wants_miss_pick:
+            closure = config.get("miss_pick_closure", 0.3)
+            for col in right_gripper_cols:
+                vals = q_drake_order[:, col]
+                q_drake_order[:, col] = open_val + closure * (vals - open_val)
+            print(f"[MISS-PICK] Scaling right-gripper closing motion to {closure:.0%} of "
+                  f"the recorded amount -> gripper should fail to secure the cube even "
+                  f"though it is at its correct recorded position")
+
+        if wants_drop_midway:
+            drop_time = config.get("drop_time")
+            if drop_time is None:
+                drop_time = (grasp_time + release_time) / 2.0
+                print(f"[DROP-MIDWAY] No --drop-time given, defaulting to window "
+                      f"midpoint t={drop_time:.2f}s")
+            if drop_time > times[-1]:
+                raise ValueError(
+                    f"--drop-time {drop_time:.2f}s is past the end of the episode "
+                    f"(duration {times[-1]:.2f}s) -- the override would touch zero "
+                    f"frames and silently do nothing. Pick a time within "
+                    f"[0, {times[-1]:.2f}]s."
+                )
+            if not (grasp_time <= drop_time <= release_time):
+                print(f"[DROP-MIDWAY] WARNING: --drop-time {drop_time:.2f}s is outside "
+                      f"the detected grasp/carry window [{grasp_time:.2f}s, "
+                      f"{release_time:.2f}s] -- the cube may already be released (or "
+                      f"not yet grasped) at that time, so this may not look like a "
+                      f"mid-transport drop.")
+            mask = times >= drop_time
+            if not mask.any():
+                raise ValueError(
+                    f"--drop-time {drop_time:.2f}s matches no recorded frames "
+                    f"(episode times run from {times[0]:.2f}s to {times[-1]:.2f}s) "
+                    f"-- the override would silently do nothing."
+                )
+            for col in right_gripper_cols:
+                q_drake_order[mask, col] = open_val
+            print(f"[DROP-MIDWAY] Forcing right gripper open from t={drop_time:.2f}s "
+                  f"onward (originally closed until t={release_time:.2f}s) "
+                  f"-> cube drops mid-transport")
+            config["drop_time"] = drop_time
+
     controller = builder.AddSystem(ReplayController(times, q_drake_order, nu))
 
     state_interpolator = builder.AddSystem(
@@ -593,6 +688,11 @@ def run_simulation(config: dict):
                 "nq": nq, "nv": nv, "n_frames": len(log_times),
                 "episode": config["episode_index"],
                 "source_col": config["source_col"],
+                "cube_position": config["cube_position"],
+                "drop_midway": config["drop_midway"],
+                "drop_time": config["drop_time"],
+                "miss_pick": config["miss_pick"],
+                "miss_pick_closure": config["miss_pick_closure"],
             }, f, indent=2)
 
         print(f"  [StateLog] Saved {len(log_times)} timesteps -> {save_dir}/trajectory_states.npz")
@@ -623,6 +723,26 @@ def parse_args():
 
     p.add_argument("--lights", type=str, default="warm", choices=list(LIGHT_VARIATIONS.keys()))
 
+    p.add_argument("--drop-midway", action="store_true",
+                    help="Force the right gripper open partway through the recorded "
+                         "grasp-carry window, so the cube drops mid-transport instead "
+                         "of reaching the real recorded drop point. Defaults to the "
+                         "midpoint of the detected grasp window unless --drop-time is set.")
+    p.add_argument("--drop-time", type=float, default=None,
+                    help="Explicit sim time (s) at which to force the right gripper "
+                         "open for the rest of the episode. Implies --drop-midway.")
+
+    p.add_argument("--miss-pick", action="store_true",
+                    help="Reduce the right gripper's closing amount during the recorded "
+                         "grasp so it fails to secure the cube, even with the cube at "
+                         "its correct recorded (--cube-position pick_place) location. "
+                         "Amount controlled by --miss-pick-closure.")
+    p.add_argument("--miss-pick-closure", type=float, default=0.0,
+                    help="Fraction (0-1) of the recorded gripper closing motion to keep "
+                         "when --miss-pick is set. 0 = gripper never closes at all during "
+                         "the grasp (clean miss, default), 1 = normal full close (no miss). "
+                         "Values in between produce a weak grip that slips off on lift.")
+
     p.add_argument("--real-fps", type=float, default=30.0,
                     help="Real camera capture fps, used to derive the sim frame save interval")
     p.add_argument("--ffmpeg-stride", type=int, default=10,
@@ -649,6 +769,10 @@ def build_config_from_args(args) -> dict:
         "cube_position": CUBE_POSITIONS.get(args.cube_position, args.cube_position),
         "lights": LIGHT_VARIATIONS[args.lights],
         "sim_save_interval": args.ffmpeg_stride / args.real_fps,
+        "drop_midway": args.drop_midway,
+        "drop_time": args.drop_time,
+        "miss_pick": args.miss_pick,
+        "miss_pick_closure": args.miss_pick_closure,
     }
 
 
